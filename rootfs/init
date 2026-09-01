@@ -1,0 +1,15 @@
+#!/bin/sh
+
+mount -t devtmpfs devtmpfs /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+
+echo "================================"
+echo "        LEVIATHAN INIT"
+echo "================================"
+echo
+echo "Root filesystem mounted."
+echo "Devices initialized."
+echo
+export PS1='leviathan# '
+exec /bin/getty
