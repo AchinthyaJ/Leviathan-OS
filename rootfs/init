@@ -10,6 +10,10 @@ echo "================================"
 echo
 echo "Root filesystem mounted."
 echo "Devices initialized."
+echo "Launching Leviathan Rust UI Graphics Subsystem (60 FPS)..."
 echo
+
+/bin/leviathan-ui
+
 export PS1='leviathan# '
 exec /bin/getty

@@ -1,0 +1,1 @@
+/home/inchara/My\ Death/Leviathan/ui/target/x86_64-unknown-linux-musl/release/leviathan-ui: /home/inchara/My\ Death/Leviathan/ui/src/color.rs /home/inchara/My\ Death/Leviathan/ui/src/font.rs /home/inchara/My\ Death/Leviathan/ui/src/graphics.rs /home/inchara/My\ Death/Leviathan/ui/src/main.rs /home/inchara/My\ Death/Leviathan/ui/src/scene.rs
