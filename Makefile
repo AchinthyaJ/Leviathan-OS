@@ -24,9 +24,34 @@ rootfs/bin/%: init/%.c
 	@mkdir -p rootfs/bin
 	$(CC) $(CFLAGS) $< -o $@
 
+ROOTFS_RELEASE_URL ?= https://github.com/AchinthyaJ/Leviathan-OS/releases/latest/download/rootfs.tar.zst
+ROOTFS_ARCHIVE ?= build/rootfs.tar.zst
+
+pack-rootfs:
+	@mkdir -p build
+	@echo "Packing rootfs into $(ROOTFS_ARCHIVE)..."
+	tar --zstd -cf $(ROOTFS_ARCHIVE) -C rootfs .
+	@echo "Created $(ROOTFS_ARCHIVE) (Upload this asset to GitHub Releases)"
+
+fetch-rootfs:
+	@mkdir -p build rootfs
+	@echo "Fetching Leviathan rootfs from $(ROOTFS_RELEASE_URL)..."
+	@if command -v curl >/dev/null 2>&1; then \
+		curl -fsSL -o $(ROOTFS_ARCHIVE) $(ROOTFS_RELEASE_URL); \
+	else \
+		wget -q -O $(ROOTFS_ARCHIVE) $(ROOTFS_RELEASE_URL); \
+	fi
+	@echo "Extracting rootfs archive..."
+	tar --zstd -xf $(ROOTFS_ARCHIVE) -C rootfs
+	@echo "Rootfs populated successfully."
+
 initramfs:
 	@mkdir -p build image/boot
 	@test -f $(OVMF_VARS) || cp -f $(OVMF_VARS_SRC) $(OVMF_VARS)
+	@if [ ! -d rootfs/usr ] || [ ! -f rootfs/init ]; then \
+		echo "rootfs is missing. Run 'make fetch-rootfs' first."; \
+		exit 1; \
+	fi
 	cd rootfs && find . -print0 | cpio --null -ov --format=newc | zstd -3 -T0 > ../$(BUILD_INITRAMFS)
 	cp $(BUILD_INITRAMFS) $(IMAGE_INITRAMFS)
 

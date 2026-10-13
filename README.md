@@ -32,6 +32,12 @@ sudo apt-get install qemu-system-x86 ovmf gcc make cpio zstd grub-pc-bin grub-ef
 
 ### Building the ISO
 
+If cloning for the first time without a pre-populated `rootfs/`, download the official rootfs release asset:
+
+```bash
+make fetch-rootfs
+```
+
 To compile init binaries, assemble the initramfs, and create the bootable ISO:
 
 ```bash
@@ -39,6 +45,12 @@ make iso
 ```
 
 The resulting ISO will be generated at `build/leviathan.iso`.
+
+To package your current `rootfs` for GitHub Releases:
+
+```bash
+make pack-rootfs
+```
 
 ### Running in QEMU
 

@@ -280,6 +280,30 @@ if [ -x /usr/sbin/ModemManager ]; then
     echo "Leviathan: ModemManager started"
 fi
 
+# Auto-install essential utilities in the background if missing
+(
+    # Wait until network is connected
+    for _i in $(seq 1 15); do
+        if ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 || ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+
+    MISSING_PKGS=""
+    command -v nano >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS nano"
+    command -v curl >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS curl"
+    command -v wget >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS wget"
+    command -v htop >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS htop"
+    command -v less >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS less"
+
+    if [ -n "$MISSING_PKGS" ] && [ -x /usr/bin/apt-get ]; then
+        echo "Leviathan Auto-Install: Installing essential utilities ($MISSING_PKGS)..." >> /var/log/leviathan-autoinstall.log
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq >/dev/null 2>&1 || true
+        apt-get install -y --no-install-recommends $MISSING_PKGS >> /var/log/leviathan-autoinstall.log 2>&1 || true
+    fi
+) &
 
 # Suppress VT text cursor before launching GUI
 printf '\033[?25l' > /dev/tty1 2>/dev/null || true
