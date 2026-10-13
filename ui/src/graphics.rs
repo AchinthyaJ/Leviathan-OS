@@ -2,14 +2,11 @@ use crate::color::Color;
 use crate::font::get_glyph;
 
 use std::fs::{File, OpenOptions};
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::AsRawFd;
 use std::ptr;
 
 const FBIOGET_FSCREENINFO: libc::c_int = 0x4602;
 const FBIOGET_VSCREENINFO: libc::c_int = 0x4600;
-const KDSETMODE: libc::c_int = 0x4B3A;
-const KD_TEXT: libc::c_int = 0;
-const KD_GRAPHICS: libc::c_int = 1;
 
 #[repr(C)]
 struct FbBitfield {
@@ -72,7 +69,7 @@ struct FbFixScreeninfo {
 
 #[allow(dead_code)]
 pub struct Graphics {
-    fb_file: File,
+    fb_file: Option<File>,
     mmap_ptr: *mut u8,
     smem_len: usize,
     width: u32,
@@ -85,81 +82,162 @@ pub struct Graphics {
     blue: FbBitfield,
     transp: FbBitfield,
     backbuffer: Vec<u8>,
-    tty_fd: Option<RawFd>,
+    damage_min_x: i32,
+    damage_min_y: i32,
+    damage_max_x: i32,
+    damage_max_y: i32,
+    has_damage: bool,
+    dummy: bool,
 }
 
 #[allow(dead_code)]
 impl Graphics {
     pub fn new() -> Result<Self, String> {
-        let fb_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/fb0")
-            .map_err(|e| format!("Failed to open /dev/fb0: {}", e))?;
+        let candidate_devices = ["/dev/fb0", "/dev/fb1"];
+        let mut last_err = String::new();
 
-        let raw_fd = fb_file.as_raw_fd();
+        for _attempt in 0..20 {
+            for &dev in &candidate_devices {
+                let fb_file = match OpenOptions::new().read(true).write(true).open(dev) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        last_err = format!("Failed to open {}: {}", dev, e);
+                        continue;
+                    }
+                };
 
-        let mut finfo: FbFixScreeninfo = unsafe { std::mem::zeroed() };
-        if unsafe { libc::ioctl(raw_fd, FBIOGET_FSCREENINFO, &mut finfo) } < 0 {
-            return Err("ioctl FBIOGET_FSCREENINFO failed".to_string());
+                let raw_fd = fb_file.as_raw_fd();
+
+                let mut finfo: FbFixScreeninfo = unsafe { std::mem::zeroed() };
+                if unsafe { libc::ioctl(raw_fd, FBIOGET_FSCREENINFO as _, &mut finfo) } < 0 {
+                    last_err = format!("ioctl FBIOGET_FSCREENINFO on {} failed", dev);
+                    continue;
+                }
+
+                let mut vinfo: FbVarScreeninfo = unsafe { std::mem::zeroed() };
+                if unsafe { libc::ioctl(raw_fd, FBIOGET_VSCREENINFO as _, &mut vinfo) } < 0 {
+                    last_err = format!("ioctl FBIOGET_VSCREENINFO on {} failed", dev);
+                    continue;
+                }
+
+                let bpp = vinfo.bits_per_pixel;
+                let bytes_per_pixel = bpp / 8;
+                if bytes_per_pixel != 4 && bytes_per_pixel != 2 && bytes_per_pixel != 3 {
+                    last_err = format!("Unsupported bits per pixel on {}: {}", dev, bpp);
+                    continue;
+                }
+
+                let smem_len = finfo.smem_len as usize;
+                if smem_len == 0 {
+                    last_err = format!("smem_len is 0 on {}", dev);
+                    continue;
+                }
+
+                let mmap_ptr = unsafe {
+                    libc::mmap(
+                        ptr::null_mut(),
+                        smem_len,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_SHARED,
+                        raw_fd,
+                        0,
+                    )
+                };
+
+                if mmap_ptr == libc::MAP_FAILED {
+                    last_err = format!("mmap {} failed", dev);
+                    continue;
+                }
+
+                let backbuffer = vec![0u8; smem_len];
+
+                return Ok(Self {
+                    fb_file: Some(fb_file),
+                    mmap_ptr: mmap_ptr as *mut u8,
+                    smem_len,
+                    width: vinfo.xres,
+                    height: vinfo.yres,
+                    pitch: finfo.line_length,
+                    bpp,
+                    bytes_per_pixel,
+                    red: vinfo.red,
+                    green: vinfo.green,
+                    blue: vinfo.blue,
+                    transp: vinfo.transp,
+                    backbuffer,
+                    damage_min_x: 0,
+                    damage_min_y: 0,
+                    damage_max_x: vinfo.xres as i32,
+                    damage_max_y: vinfo.yres as i32,
+                    has_damage: true,
+                    dummy: false,
+                });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        let mut vinfo: FbVarScreeninfo = unsafe { std::mem::zeroed() };
-        if unsafe { libc::ioctl(raw_fd, FBIOGET_VSCREENINFO, &mut vinfo) } < 0 {
-            return Err("ioctl FBIOGET_VSCREENINFO failed".to_string());
-        }
-
-        let bpp = vinfo.bits_per_pixel;
-        let bytes_per_pixel = bpp / 8;
-        if bytes_per_pixel != 4 && bytes_per_pixel != 2 && bytes_per_pixel != 3 {
-            return Err(format!("Unsupported bits per pixel: {}", bpp));
-        }
-
-        let smem_len = finfo.smem_len as usize;
-        let mmap_ptr = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                smem_len,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                raw_fd,
-                0,
-            )
-        };
-
-        if mmap_ptr == libc::MAP_FAILED {
-            return Err("mmap /dev/fb0 failed".to_string());
-        }
-
+        // Fallback to dummy buffer for testing
+        let width = 800;
+        let height = 600;
+        let bytes_per_pixel = 4;
+        let pitch = width * bytes_per_pixel;
+        let smem_len = (pitch * height) as usize;
         let backbuffer = vec![0u8; smem_len];
 
-        // Silence Linux Virtual Terminal cursor & text output
-        let mut tty_fd = None;
-        for path in &["/dev/tty0", "/dev/tty1", "/dev/console"] {
-            let fd = unsafe { libc::open(path.as_ptr() as *const libc::c_char, libc::O_RDWR) };
-            if fd >= 0 {
-                unsafe { libc::ioctl(fd, KDSETMODE, KD_GRAPHICS) };
-                tty_fd = Some(fd);
-                break;
-            }
-        }
-
         Ok(Self {
-            fb_file,
-            mmap_ptr: mmap_ptr as *mut u8,
+            fb_file: None,
+            mmap_ptr: ptr::null_mut(),
             smem_len,
-            width: vinfo.xres,
-            height: vinfo.yres,
-            pitch: finfo.line_length,
-            bpp,
+            width,
+            height,
+            pitch: pitch as u32,
+            bpp: 32,
             bytes_per_pixel,
-            red: vinfo.red,
-            green: vinfo.green,
-            blue: vinfo.blue,
-            transp: vinfo.transp,
+            red: FbBitfield { offset: 16, length: 8, msb_right: 0 },
+            green: FbBitfield { offset: 8, length: 8, msb_right: 0 },
+            blue: FbBitfield { offset: 0, length: 8, msb_right: 0 },
+            transp: FbBitfield { offset: 24, length: 8, msb_right: 0 },
             backbuffer,
-            tty_fd,
+            damage_min_x: 0,
+            damage_min_y: 0,
+            damage_max_x: width as i32,
+            damage_max_y: height as i32,
+            has_damage: true,
+            dummy: true,
         })
+    }
+
+    /// Create a Wayland-mode Graphics with the given dimensions.
+    ///
+    /// No framebuffer is opened.  The backbuffer is a normal `Vec<u8>` that
+    /// callers read with `get_backbuffer()` and then hand to the Wayland
+    /// backend's `present()` call.  `swap_buffers()` is a no-op in this mode.
+    pub fn new_for_wayland(width: u32, height: u32) -> Self {
+        let bytes_per_pixel: u32 = 4;
+        let pitch = width * bytes_per_pixel;
+        let smem_len = (pitch * height) as usize;
+        Self {
+            fb_file: None,
+            mmap_ptr: ptr::null_mut(),
+            smem_len,
+            width,
+            height,
+            pitch,
+            bpp: 32,
+            bytes_per_pixel,
+            // BGRA layout (matches wl_shm Xrgb8888 on little-endian)
+            red:    FbBitfield { offset: 16, length: 8, msb_right: 0 },
+            green:  FbBitfield { offset:  8, length: 8, msb_right: 0 },
+            blue:   FbBitfield { offset:  0, length: 8, msb_right: 0 },
+            transp: FbBitfield { offset: 24, length: 8, msb_right: 0 },
+            backbuffer: vec![0u8; smem_len],
+            damage_min_x: 0,
+            damage_min_y: 0,
+            damage_max_x: width as i32,
+            damage_max_y: height as i32,
+            has_damage: true,
+            dummy: true, // swap_buffers() is a no-op; Wayland backend presents
+        }
     }
 
     pub fn width(&self) -> u32 { self.width }
@@ -167,6 +245,51 @@ impl Graphics {
     pub fn pitch(&self) -> u32 { self.pitch }
     pub fn bpp(&self) -> u32 { self.bpp }
     pub fn buffer_size(&self) -> usize { self.smem_len }
+
+    #[inline(always)]
+    pub fn mark_dirty(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        let x0 = x.clamp(0, self.width as i32);
+        let y0 = y.clamp(0, self.height as i32);
+        let x1 = (x + w).clamp(0, self.width as i32);
+        let y1 = (y + h).clamp(0, self.height as i32);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+
+        if !self.has_damage {
+            self.damage_min_x = x0;
+            self.damage_min_y = y0;
+            self.damage_max_x = x1;
+            self.damage_max_y = y1;
+            self.has_damage = true;
+        } else {
+            self.damage_min_x = self.damage_min_x.min(x0);
+            self.damage_min_y = self.damage_min_y.min(y0);
+            self.damage_max_x = self.damage_max_x.max(x1);
+            self.damage_max_y = self.damage_max_y.max(y1);
+        }
+    }
+
+    #[inline(always)]
+    pub fn mark_all_dirty(&mut self) {
+        self.damage_min_x = 0;
+        self.damage_min_y = 0;
+        self.damage_max_x = self.width as i32;
+        self.damage_max_y = self.height as i32;
+        self.has_damage = true;
+    }
+
+    #[inline(always)]
+    pub fn reset_damage(&mut self) {
+        self.has_damage = false;
+        self.damage_min_x = self.width as i32;
+        self.damage_min_y = self.height as i32;
+        self.damage_max_x = 0;
+        self.damage_max_y = 0;
+    }
 
     #[inline(always)]
     pub fn pack_color(&self, c: Color) -> u32 {
@@ -183,7 +306,8 @@ impl Graphics {
 
     #[inline(always)]
     pub fn put_pixel(&mut self, x: i32, y: i32, c: Color) {
-        if x < 0 || (x as u32) >= self.width || y < 0 || (y as u32) >= self.height {
+        // bounds check
+        if x < 0 || (x as u32) >= self.width || y < 0 || (y as u32) >= self.height || c.a == 0 {
             return;
         }
 
@@ -192,13 +316,40 @@ impl Graphics {
             return;
         }
 
-        let pval = self.pack_color(c);
         let bpp = self.bytes_per_pixel;
 
         if bpp == 4 {
+            let final_color = if c.a == 255 {
+                c
+            } else {
+                let bytes: [u8; 4] = self.backbuffer[offset..offset + 4].try_into().unwrap_or([0; 4]);
+                let pval = u32::from_ne_bytes(bytes);
+                let r_shift = 8usize.saturating_sub(self.red.length as usize) as u32;
+                let g_shift = 8usize.saturating_sub(self.green.length as usize) as u32;
+                let b_shift = 8usize.saturating_sub(self.blue.length as usize) as u32;
+                let r_mask = if self.red.length >= 32 { u32::MAX } else { (1u32 << self.red.length) - 1 };
+                let g_mask = if self.green.length >= 32 { u32::MAX } else { (1u32 << self.green.length) - 1 };
+                let b_mask = if self.blue.length >= 32 { u32::MAX } else { (1u32 << self.blue.length) - 1 };
+
+                let dst_r = (((pval >> self.red.offset) & r_mask) << r_shift) as u32;
+                let dst_g = (((pval >> self.green.offset) & g_mask) << g_shift) as u32;
+                let dst_b = (((pval >> self.blue.offset) & b_mask) << b_shift) as u32;
+
+                let a = c.a as u32;
+                let inv_a = 255 - a;
+
+                Color {
+                    r: ((c.r as u32 * a + dst_r * inv_a + 127) / 255) as u8,
+                    g: ((c.g as u32 * a + dst_g * inv_a + 127) / 255) as u8,
+                    b: ((c.b as u32 * a + dst_b * inv_a + 127) / 255) as u8,
+                    a: 255,
+                }
+            };
+            let pval = self.pack_color(final_color);
             let slice = &mut self.backbuffer[offset..offset + 4];
             slice.copy_from_slice(&pval.to_ne_bytes());
         } else if bpp == 2 {
+            let pval = self.pack_color(c);
             let slice = &mut self.backbuffer[offset..offset + 2];
             slice.copy_from_slice(&(pval as u16).to_ne_bytes());
         } else if bpp == 3 {
@@ -246,10 +397,11 @@ impl Graphics {
                 }
             }
         }
+        self.mark_all_dirty();
     }
 
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: Color) {
-        if w <= 0 || h <= 0 {
+        if w <= 0 || h <= 0 || c.a == 0 {
             return;
         }
 
@@ -262,17 +414,75 @@ impl Graphics {
             return;
         }
 
-        let pval = self.pack_color(c);
-        let bytes = pval.to_ne_bytes();
+        self.mark_dirty(x0, y0, x1 - x0, y1 - y0);
 
-        for cy in y0..y1 {
-            let row_offset = (cy as usize) * (self.pitch as usize);
-            for cx in x0..x1 {
-                let offset = row_offset + (cx as usize) * (self.bytes_per_pixel as usize);
-                if self.bytes_per_pixel == 4 {
-                    self.backbuffer[offset..offset + 4].copy_from_slice(&bytes);
-                } else {
-                    self.put_pixel(cx, cy, c);
+        if c.a == 255 {
+            let pval = self.pack_color(c);
+            let bytes = pval.to_ne_bytes();
+
+            for cy in y0..y1 {
+                let row_offset = (cy as usize) * (self.pitch as usize);
+                for cx in x0..x1 {
+                    let offset = row_offset + (cx as usize) * (self.bytes_per_pixel as usize);
+                    if self.bytes_per_pixel == 4 {
+                        self.backbuffer[offset..offset + 4].copy_from_slice(&bytes);
+                    } else {
+                        self.put_pixel(cx, cy, c);
+                    }
+                }
+            }
+        } else {
+            // Alpha blended fill
+            let a = c.a as u32;
+            let inv_a = 255 - a;
+            let src_r = c.r as u32;
+            let src_g = c.g as u32;
+            let src_b = c.b as u32;
+
+            let r_off = self.red.offset;
+            let r_len = self.red.length;
+            let r_shift = 8usize.saturating_sub(r_len as usize) as u32;
+            let r_mask = if r_len >= 32 { u32::MAX } else { (1u32 << r_len) - 1 };
+
+            let g_off = self.green.offset;
+            let g_len = self.green.length;
+            let g_shift = 8usize.saturating_sub(g_len as usize) as u32;
+            let g_mask = if g_len >= 32 { u32::MAX } else { (1u32 << g_len) - 1 };
+
+            let b_off = self.blue.offset;
+            let b_len = self.blue.length;
+            let b_shift = 8usize.saturating_sub(b_len as usize) as u32;
+            let b_mask = if b_len >= 32 { u32::MAX } else { (1u32 << b_len) - 1 };
+
+            if self.bytes_per_pixel == 4 {
+                for cy in y0..y1 {
+                    let row_offset = (cy as usize) * (self.pitch as usize);
+                    for cx in x0..x1 {
+                        let offset = row_offset + (cx as usize) * 4;
+                        if offset + 4 <= self.smem_len {
+                            let bytes: [u8; 4] = self.backbuffer[offset..offset + 4].try_into().unwrap_or([0; 4]);
+                            let pval = u32::from_ne_bytes(bytes);
+                            let dst_r = (((pval >> r_off) & r_mask) << r_shift) as u32;
+                            let dst_g = (((pval >> g_off) & g_mask) << g_shift) as u32;
+                            let dst_b = (((pval >> b_off) & b_mask) << b_shift) as u32;
+
+                            let blended_r = (src_r * a + dst_r * inv_a + 127) / 255;
+                            let blended_g = (src_g * a + dst_g * inv_a + 127) / 255;
+                            let blended_b = (src_b * a + dst_b * inv_a + 127) / 255;
+
+                            let pr = ((blended_r >> r_shift) & r_mask) << r_off;
+                            let pg = ((blended_g >> g_shift) & g_mask) << g_off;
+                            let pb = ((blended_b >> b_shift) & b_mask) << b_off;
+                            let new_pval = pr | pg | pb;
+                            self.backbuffer[offset..offset + 4].copy_from_slice(&new_pval.to_ne_bytes());
+                        }
+                    }
+                }
+            } else {
+                for cy in y0..y1 {
+                    for cx in x0..x1 {
+                        self.put_pixel(cx, cy, c);
+                    }
                 }
             }
         }
@@ -388,33 +598,277 @@ impl Graphics {
         }
     }
 
-    /// Fast-blits the backbuffer to physical framebuffer in single burst
+    #[inline(always)]
+    pub fn draw_string(&mut self, x: u32, y: u32, text: &str, fg: Color) {
+        self.draw_text(x as i32, y as i32, text, fg, None);
+    }
+
+    /// Same as draw_string but accepts signed i32 coordinates (for use in window/UI code)
+    pub fn draw_string_i(&mut self, x: i32, y: i32, text: &str, fg: Color) {
+        if x >= 0 && y >= 0 {
+            self.draw_text(x, y, text, fg, None);
+        }
+    }
+
+    pub fn fill_rounded_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color) {
+        self.fill_squircle(x, y, w, h, radius, color);
+    }
+
+    pub fn draw_rounded_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color) {
+        self.draw_squircle(x, y, w, h, radius, color);
+    }
+
+    pub fn fill_gradient_v(&mut self, x: i32, y: i32, w: i32, h: i32, top: Color, bottom: Color) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        for dy in 0..h {
+            let t = if h > 1 { dy as f32 / (h - 1) as f32 } else { 0.0 };
+            let r = (top.r as f32 + t * (bottom.r as f32 - top.r as f32)).round() as u8;
+            let g = (top.g as f32 + t * (bottom.g as f32 - top.g as f32)).round() as u8;
+            let b = (top.b as f32 + t * (bottom.b as f32 - top.b as f32)).round() as u8;
+            let a = (top.a as f32 + t * (bottom.a as f32 - top.a as f32)).round() as u8;
+            let c = Color { r, g, b, a };
+            self.fill_rect(x, y + dy, w, 1, c);
+        }
+    }
+
+    pub fn draw_char_scaled(&mut self, x: i32, y: i32, ch: char, scale: u32, fg: Color, bg: Option<Color>) {
+        if scale <= 1 {
+            self.draw_char(x, y, ch, fg, bg);
+            return;
+        }
+        let glyph = get_glyph(ch);
+        let s = scale as i32;
+        for row in 0..8 {
+            let byte = glyph[row];
+            for col in 0..8 {
+                let px = x + (col as i32) * s;
+                let py = y + (row as i32) * s;
+                if (byte & (0x80 >> col)) != 0 {
+                    self.fill_rect(px, py, s, s, fg);
+                } else if let Some(bg_col) = bg {
+                    if bg_col.a > 0 {
+                        self.fill_rect(px, py, s, s, bg_col);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn draw_text_scaled(&mut self, x: i32, y: i32, text: &str, scale: u32, fg: Color) {
+        let s = scale.max(1) as i32;
+        let mut cur_x = x;
+        let mut cur_y = y;
+
+        for ch in text.chars() {
+            if ch == '\n' {
+                cur_x = x;
+                cur_y += 10 * s;
+            } else if ch == '\t' {
+                cur_x += 32 * s;
+            } else {
+                self.draw_char_scaled(cur_x, cur_y, ch, scale, fg, None);
+                cur_x += 8 * s;
+            }
+        }
+    }
+
+    pub fn draw_text_shadow(&mut self, x: i32, y: i32, text: &str, scale: u32, fg: Color, shadow_color: Color) {
+        let offset = (scale.max(1) as i32).max(1);
+        self.draw_text_scaled(x + offset, y + offset, text, scale, shadow_color);
+        self.draw_text_scaled(x, y, text, scale, fg);
+    }
+
+    #[inline(always)]
+    pub fn draw_pixel_fast(&mut self, x: u32, y: u32, c: Color) {
+        self.put_pixel(x as i32, y as i32, c);
+    }
+
+    /// Optimized buffer presentation - only flushes damaged scanlines to prevent kernel CPU hogging
     pub fn swap_buffers(&mut self) {
-        unsafe {
-            ptr::copy_nonoverlapping(self.backbuffer.as_ptr(), self.mmap_ptr, self.smem_len);
+        if !self.has_damage {
+            return;
+        }
+        if self.dummy {
+            self.reset_damage();
+            return;
+        }
+
+        let start_y = self.damage_min_y.max(0) as usize;
+        let end_y = (self.damage_max_y.min(self.height as i32)) as usize;
+        let pitch = self.pitch as usize;
+
+        if start_y < end_y {
+            let offset = start_y * pitch;
+            let len = (end_y - start_y) * pitch;
+            if offset + len <= self.smem_len {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        self.backbuffer.as_ptr().add(offset),
+                        self.mmap_ptr.add(offset),
+                        len,
+                    );
+                    libc::msync(
+                        self.mmap_ptr.add(offset) as *mut libc::c_void,
+                        len,
+                        libc::MS_SYNC,
+                    );
+                    libc::pwrite(
+                        self.fb_file.as_ref().expect("fb_file should be Some in non-dummy mode").as_raw_fd(),
+                        self.backbuffer.as_ptr().add(offset) as *const libc::c_void,
+                        len,
+                        offset as libc::off_t,
+                    );
+                }
+            }
+        }
+        self.reset_damage();
+    }
+
+    /// Fast-swaps an exact sub-rectangle directly to hardware (ideal for immediate cursor updates)
+    pub fn swap_rect(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        let x0 = x.clamp(0, self.width as i32) as usize;
+        let y0 = y.clamp(0, self.height as i32) as usize;
+        let x1 = (x + w).clamp(0, self.width as i32) as usize;
+        let y1 = (y + h).clamp(0, self.height as i32) as usize;
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+
+        let bpp = self.bytes_per_pixel as usize;
+        let pitch = self.pitch as usize;
+        let row_bytes = (x1 - x0) * bpp;
+
+        for cy in y0..y1 {
+            let offset = cy * pitch + x0 * bpp;
+            if offset + row_bytes <= self.smem_len {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        self.backbuffer.as_ptr().add(offset),
+                        self.mmap_ptr.add(offset),
+                        row_bytes,
+                    );
+                    libc::pwrite(
+                        self.fb_file.as_ref().expect("fb_file should be Some in non-dummy mode").as_raw_fd(),
+                        self.backbuffer.as_ptr().add(offset) as *const libc::c_void,
+                        row_bytes,
+                        offset as libc::off_t,
+                    );
+                }
+            }
         }
     }
 
     pub fn copy_to_backbuffer(&mut self, src: &[u8]) {
         let len = src.len().min(self.smem_len);
         self.backbuffer[..len].copy_from_slice(&src[..len]);
+        self.mark_all_dirty();
     }
 
     pub fn get_backbuffer(&self) -> &[u8] {
         &self.backbuffer
     }
+
+    #[inline(always)]
+    pub fn backbuffer_mut(&mut self) -> &mut [u8] {
+        &mut self.backbuffer
+    }
+
+    #[inline(always)]
+    pub fn bytes_per_pixel(&self) -> u32 {
+        self.bytes_per_pixel
+    }
+
+    /// Fast-blits a BGRX/BGRA pixel buffer (e.g. from Xvfb) to the backbuffer with clipping
+    pub fn blit_bgrx_rect(&mut self, dst_x: i32, dst_y: i32, w: i32, h: i32, src: &[u8]) {
+        if w <= 0 || h <= 0 || src.is_empty() {
+            return;
+        }
+        let sw = self.width as i32;
+        let sh = self.height as i32;
+        let src_stride = (w as usize) * 4;
+
+        // Clip in Y
+        let y_start = if dst_y < 0 { (-dst_y) as usize } else { 0 };
+        let y_end = if dst_y + h > sh { (sh - dst_y).max(0) as usize } else { h as usize };
+
+        // Clip in X
+        let x_start = if dst_x < 0 { (-dst_x) as usize } else { 0 };
+        let x_end = if dst_x + w > sw { (sw - dst_x).max(0) as usize } else { w as usize };
+
+        if x_start >= x_end || y_start >= y_end {
+            return;
+        }
+
+        let copy_pixels = x_end - x_start;
+        self.mark_dirty(dst_x + x_start as i32, dst_y + y_start as i32, copy_pixels as i32, (y_end - y_start) as i32);
+        let bpp = self.bytes_per_pixel as usize;
+
+        // Check if native 32-bit framebuffer matches BGRX layout byte-for-byte
+        let is_native_bgrx = bpp == 4
+            && self.blue.offset == 0
+            && self.green.offset == 8
+            && self.red.offset == 16;
+
+        for cy in y_start..y_end {
+            let screen_y = dst_y + cy as i32;
+            let screen_row_offset = (screen_y as usize) * (self.pitch as usize);
+            let src_row_start = cy * src_stride;
+
+            if is_native_bgrx {
+                let dst_offset = screen_row_offset + ((dst_x + x_start as i32) as usize) * 4;
+                let src_offset = src_row_start + x_start * 4;
+                let byte_len = copy_pixels * 4;
+                if src_offset + byte_len <= src.len() && dst_offset + byte_len <= self.smem_len {
+                    self.backbuffer[dst_offset..dst_offset + byte_len]
+                        .copy_from_slice(&src[src_offset..src_offset + byte_len]);
+                }
+            } else {
+                let p_len = self.smem_len;
+                for cx in x_start..x_end {
+                    let screen_x = dst_x + cx as i32;
+                    let src_idx = src_row_start + cx * 4;
+                    if src_idx + 3 < src.len() {
+                        let b = src[src_idx];
+                        let g = src[src_idx + 1];
+                        let r = src[src_idx + 2];
+                        let pval = self.pack_color(Color::new(r, g, b));
+                        let dst_offset = screen_row_offset + (screen_x as usize) * bpp;
+                        if dst_offset + bpp <= p_len {
+                            if bpp == 4 {
+                                self.backbuffer[dst_offset..dst_offset + 4].copy_from_slice(&pval.to_ne_bytes());
+                            } else if bpp == 2 {
+                                self.backbuffer[dst_offset..dst_offset + 2].copy_from_slice(&(pval as u16).to_ne_bytes());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    /// Draws a subtle, cute procedural paw print motif (main pad + 3 toes)
+    pub fn draw_paw(&mut self, cx: i32, cy: i32, r: i32, color: Color) {
+        if r <= 0 {
+            return;
+        }
+        // Main bottom pad
+        self.fill_circle(cx, cy + r / 4, (r * 3) / 4, color);
+        // 3 toe dots arranged in an arc above
+        let toe_r = (r * 3) / 10;
+        let toe_y = cy - (r * 2) / 3;
+        let toe_spread = (r * 3) / 4;
+        self.fill_circle(cx - toe_spread, toe_y + r / 6, toe_r, color);
+        self.fill_circle(cx, toe_y - r / 10, toe_r, color);
+        self.fill_circle(cx + toe_spread, toe_y + r / 6, toe_r, color);
+    }
 }
 
 impl Drop for Graphics {
     fn drop(&mut self) {
-        // Restore VT text mode
-        if let Some(fd) = self.tty_fd {
-            unsafe {
-                libc::ioctl(fd, KDSETMODE, KD_TEXT);
-                libc::close(fd);
-            }
-        }
-
         // Unmap framebuffer memory
         if !self.mmap_ptr.is_null() && self.mmap_ptr != libc::MAP_FAILED as *mut u8 {
             unsafe {

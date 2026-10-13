@@ -5,10 +5,28 @@ edition = "2021"
 
 [dependencies]
 libc = "0.2"
+png = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "4.0"
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+[lib]
+name = "leviathan_ui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "leviathan-ui"
+path = "src/main.rs"
+
+[[bin]]
+name = "leviathan"
+path = "src/bin/leviathan_cli.rs"
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
 strip = true

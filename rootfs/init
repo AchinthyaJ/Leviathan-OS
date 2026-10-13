@@ -3,6 +3,35 @@
 mount -t devtmpfs devtmpfs /dev
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+mkdir -p /dev/shm /dev/pts /run /tmp
+mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+chmod 1777 /tmp /dev/shm
+
+# Mount persistent writable data disk (survives reboots)
+mkdir -p /mnt/data
+DATA_MOUNTED=0
+for dev in $(blkid 2>/dev/null | grep -i 'ext4' | cut -d: -f1) /dev/vdb /dev/vda /dev/sdb /dev/sda; do
+    if [ -b "$dev" ]; then
+        if mount -t ext4 "$dev" /mnt/data 2>/dev/null; then
+            echo "Leviathan: Persistent data disk mounted at /mnt/data ($dev)"
+            DATA_MOUNTED=1
+            break
+        fi
+    fi
+done
+if [ $DATA_MOUNTED -eq 0 ]; then
+    echo "Leviathan: No persistent data disk found, using tmpfs for /mnt/data"
+    mount -t tmpfs tmpfs /mnt/data
+fi
+# Ensure the leviathan layers directory exists on the data disk
+mkdir -p /mnt/data/leviathan/layers
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+export LD_LIBRARY_PATH="/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
+mkdir -p /var/log /var/tmp /tmp /var/cache/apt/archives/partial /home/leviathan
+touch /var/log/dpkg.log && chmod 666 /var/log/dpkg.log
 
 echo "================================"
 echo "        LEVIATHAN INIT"
@@ -10,10 +39,333 @@ echo "================================"
 echo
 echo "Root filesystem mounted."
 echo "Devices initialized."
-echo "Launching Leviathan Rust UI Graphics Subsystem (60 FPS)..."
 echo
 
-/bin/leviathan-ui
+# 1. Bring up local loopback
+ifconfig lo 127.0.0.1 up 2>/dev/null || true
 
-export PS1='leviathan# '
-exec /bin/getty
+# 2. Probe for network devices and obtain DHCP lease (non-blocking)
+for ifpath in /sys/class/net/*; do
+    [ -e "$ifpath" ] || continue
+    ifname=$(basename "$ifpath")
+    if [ "$ifname" != "lo" ] && [ "${ifname#wl}" = "$ifname" ]; then
+        echo "Leviathan Network: Configuring $ifname via DHCP (background)..."
+        ifconfig "$ifname" up 2>/dev/null || true
+        udhcpc -b -i "$ifname" -s /usr/share/udhcpc/default.script -n -q -t 2 2>/dev/null &
+        break
+    fi
+done
+
+# 3. Start udev early for fast parallel device discovery
+echo "Leviathan: Starting udev..."
+mkdir -p /run/udev
+/usr/lib/systemd/systemd-udevd 2>/dev/null &
+
+# 4. Critical desktop hardware drivers (VirtIO GPU, Input, Audio)
+KMODDIR="/usr/lib/modules/$(uname -r)/kernel"
+insmod "$KMODDIR/drivers/virtio/virtio_dma_buf.ko" 2>/dev/null || true
+insmod "$KMODDIR/drivers/gpu/drm/virtio/virtio-gpu.ko" 2>/dev/null || true
+modprobe virtio-gpu 2>/dev/null || true
+insmod "$KMODDIR/drivers/virtio/virtio_input.ko" 2>/dev/null || true
+insmod "$KMODDIR/drivers/input/mouse/psmouse.ko" 2>/dev/null || true
+insmod "$KMODDIR/drivers/hid/hid.ko" 2>/dev/null || true
+insmod "$KMODDIR/drivers/hid/hid-generic.ko" 2>/dev/null || true
+insmod "$KMODDIR/drivers/hid/usbhid/usbhid.ko" 2>/dev/null || true
+modprobe snd-hda-intel 2>/dev/null || true
+modprobe snd-hda-codec-generic 2>/dev/null || true
+
+# Settle udev quickly
+udevadm trigger --action=add 2>/dev/null || true
+udevadm settle --timeout=1 2>/dev/null || true
+
+# Background extra hardware drivers (Wi-Fi, Bluetooth, ACPI, auxiliary GPUs)
+(
+    modprobe i915 2>/dev/null || true
+    modprobe amdgpu 2>/dev/null || true
+    modprobe cfg80211 2>/dev/null || true
+    modprobe mac80211 2>/dev/null || true
+    modprobe iwlwifi 2>/dev/null || true
+    modprobe rtw88_8822ce 2>/dev/null || true
+    modprobe rtw89_8852ce 2>/dev/null || true
+    modprobe ath10k_pci 2>/dev/null || true
+    modprobe bluetooth 2>/dev/null || true
+    modprobe btusb 2>/dev/null || true
+    modprobe btbcm 2>/dev/null || true
+    modprobe btintel 2>/dev/null || true
+    modprobe bnep 2>/dev/null || true
+    modprobe rfcomm 2>/dev/null || true
+    modprobe usbnet 2>/dev/null || true
+    modprobe acpi_battery 2>/dev/null || true
+    modprobe ac 2>/dev/null || true
+    modprobe battery 2>/dev/null || true
+    modprobe snd-hda-codec-hdmi 2>/dev/null || true
+    modprobe snd-hda-codec-realtek 2>/dev/null || true
+    modprobe snd-usb-audio 2>/dev/null || true
+    chmod a+w /sys/class/backlight/*/brightness 2>/dev/null || true
+) &
+
+# 5. Set filesystem permissions for userspace
+mkdir -p /root /home /tmp /var/log /var/tmp
+ln -sfn /root /home/leviathan 2>/dev/null || true
+mkdir -p /var/cache/apt/archives/partial
+mkdir -p /var/lib/apt/lists/partial
+mkdir -p /var/lib/dpkg/info /var/lib/dpkg/updates /var/lib/dpkg/triggers
+touch /var/lib/dpkg/status 2>/dev/null
+chown -R 0:0 /root 2>/dev/null || true
+chmod 1777 /tmp /var/tmp 2>/dev/null || true
+chmod 4755 /bin/sudo 2>/dev/null || true
+
+# 6. Configure dynamic linker cache
+ldconfig 2>/dev/null || true
+
+# 7. Environment for package management
+export DEBIAN_FRONTEND=noninteractive
+export LANG=C.UTF-8
+export HOME=/root
+export DPKG_DATADIR=/usr/share/dpkg
+export DPKG_MAINTSCRIPT_ARCH=amd64
+export APT_CONFIG=/etc/apt/apt.conf.d/99leviathan.conf
+
+# 8. Setup CPU tables and architecture tables for APT & dpkg
+mkdir -p /usr/share/dpkg /var/lib/dpkg /usr/lib/dpkg /etc/dpkg /etc/dpkg/dpkg.cfg.d
+echo "amd64" > /var/lib/dpkg/arch
+echo "amd64" > /etc/dpkg/arch
+echo "force-architecture" > /etc/dpkg/dpkg.cfg.d/force-arch
+
+# Symlink all dpkg tables everywhere dpkg or libapt-pkg might search
+if [ -d /usr/share/dpkg ]; then
+    ln -sf /usr/share/dpkg/tupletable /usr/share/dpkg/triplettable 2>/dev/null || true
+    for t in cputable tupletable triplettable ostable abitable; do
+        ln -sf /usr/share/dpkg/"$t" /var/lib/dpkg/"$t" 2>/dev/null || true
+        ln -sf /usr/share/dpkg/"$t" /usr/lib/dpkg/"$t" 2>/dev/null || true
+        ln -sf /usr/share/dpkg/"$t" /etc/dpkg/"$t" 2>/dev/null || true
+    done
+fi
+
+# Ensure /etc/environment persists these for all subprocesses and users
+cat << 'EOF' > /etc/environment
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games"
+LD_LIBRARY_PATH="/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/lib"
+QT_PLUGIN_PATH="/usr/lib/x86_64-linux-gnu/qt5/plugins"
+QT_QPA_PLATFORM_PLUGIN_PATH="/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms"
+QT_QPA_PLATFORM="wayland;xcb"
+DEBIAN_FRONTEND="noninteractive"
+DPKG_DATADIR="/usr/share/dpkg"
+DPKG_MAINTSCRIPT_ARCH="amd64"
+APT_CONFIG="/etc/apt/apt.conf.d/99leviathan.conf"
+MOZ_ENABLE_WAYLAND="1"
+EOF
+
+# Ensure dpkg-divert safely ignores directory diversions (e.g. merged /lib64 by libc6 preinst)
+cat << 'EOF' > /usr/bin/dpkg-divert
+#!/bin/sh
+out=$(/usr/bin/dpkg-divert.real "$@" 2>&1)
+ret=$?
+if [ $ret -eq 0 ]; then
+    [ -n "$out" ] && echo "$out"
+    exit 0
+fi
+case "$out" in
+    *"cannot divert directories"*|*"clashes with"*)
+        exit 0
+        ;;
+    *)
+        echo "$out" >&2
+        exit $ret
+        ;;
+esac
+EOF
+chmod 755 /usr/bin/dpkg-divert 2>/dev/null || true
+
+if [ ! -s /var/lib/dpkg/status ]; then
+    echo "Leviathan: Initializing dpkg package database..."
+    touch /var/lib/dpkg/status
+    touch /var/lib/dpkg/available
+    mkdir -p /var/lib/dpkg/info
+    mkdir -p /var/lib/dpkg/updates
+    mkdir -p /var/lib/dpkg/triggers
+    echo "amd64" > /var/lib/dpkg/arch
+    echo "1" > /var/lib/dpkg/triggers/Lock 2>/dev/null || true
+fi
+
+# 9. Ensure X11 runtime socket directory exists for Xvfb windows
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix 2>/dev/null || true
+
+# Ensure root/leviathan user directories exist with root ownership
+mkdir -p /root/Downloads /root/Desktop /root/Documents /root/.local/share/applications /root/.config /root/.cache /root/.mozilla/firefox
+mkdir -p /home
+ln -sfn /root /home/leviathan 2>/dev/null || true
+chown -R 0:0 /root 2>/dev/null || true
+
+# 10. Setup DNS resolution fallback
+if [ ! -s /etc/resolv.conf ]; then
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+fi
+
+echo
+echo "Launching Leviathan Wayland compositor session..."
+echo
+
+# 11. Core D-Bus and system services
+mkdir -p /run/dbus /var/run/dbus
+chmod 755 /run/dbus /var/run/dbus
+chown -R messagebus:messagebus /run/dbus /var/run/dbus 2>/dev/null || chown -R dbus:dbus /run/dbus /var/run/dbus 2>/dev/null || true
+if [ -x /usr/bin/dbus-daemon ]; then
+    /usr/bin/dbus-daemon --system --fork 2>/dev/null || true
+    echo "Leviathan: dbus system bus started"
+    # Wait briefly for system bus socket
+    for i in 1 2 3 4 5; do
+        [ -e /run/dbus/system_bus_socket ] && break
+        sleep 0.1
+    done
+fi
+
+# Allow desktop userspace hardware control rules for Polkit
+mkdir -p /etc/polkit-1/rules.d
+cat << 'EOF' > /etc/polkit-1/rules.d/60-leviathan-desktop.rules
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 ||
+        action.id.indexOf("org.freedesktop.upower.") === 0 ||
+        action.id.indexOf("org.freedesktop.ModemManager1.") === 0 ||
+        action.id.indexOf("org.bluez.") === 0 ||
+        action.id.indexOf("org.freedesktop.login1.") === 0 ||
+        action.id.indexOf("org.freedesktop.timedate1.") === 0 ||
+        action.id.indexOf("org.freedesktop.hostname1.") === 0) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+chmod 644 /etc/polkit-1/rules.d/60-leviathan-desktop.rules 2>/dev/null || true
+
+# Polkit authorization daemon (needed by Noctalia and system controls)
+if [ -x /usr/lib/polkit-1/polkitd ]; then
+    /usr/lib/polkit-1/polkitd --no-debug &
+    echo "Leviathan: polkitd started"
+fi
+
+# 12. Hardware services
+
+# Bluetooth
+if [ -x /usr/sbin/bluetoothd ]; then
+    mkdir -p /var/run/bluetooth
+    /usr/sbin/bluetoothd --nodetach &
+    echo "Leviathan: bluetoothd started"
+fi
+
+# UPower (battery, power management)
+if [ -x /usr/libexec/upowerd ]; then
+    /usr/libexec/upowerd &
+    echo "Leviathan: upowerd started"
+fi
+
+# wpa_supplicant (needed by NetworkManager for Wi-Fi)
+if [ -x /usr/sbin/wpa_supplicant ]; then
+    mkdir -p /run/wpa_supplicant
+    /usr/sbin/wpa_supplicant -B -u -s -O /run/wpa_supplicant 2>/dev/null || true
+    echo "Leviathan: wpa_supplicant started"
+fi
+
+# NetworkManager (Wi-Fi, Ethernet, BT tethering, USB tethering)
+if [ -x /usr/sbin/NetworkManager ]; then
+    mkdir -p /run/NetworkManager /var/lib/NetworkManager
+    /usr/sbin/NetworkManager --no-daemon &
+    echo "Leviathan: NetworkManager started"
+fi
+
+# ModemManager (mobile broadband, USB tethering)
+if [ -x /usr/sbin/ModemManager ]; then
+    /usr/sbin/ModemManager --test-no-suspend-resume &
+    echo "Leviathan: ModemManager started"
+fi
+
+
+# Suppress VT text cursor before launching GUI
+printf '\033[?25l' > /dev/tty1 2>/dev/null || true
+printf '\033[?25l' > /dev/console 2>/dev/null || true
+
+# --- Hyprland & Desktop runtime environment ---
+mkdir -p /run/user/0
+ln -sfn /run/user/0 /run/user/1000 2>/dev/null || true
+chmod 700 /run/user/0
+export XDG_RUNTIME_DIR=/run/user/0
+export USER=leviathan
+export USERNAME=leviathan
+export LOGNAME=leviathan
+export HOME=/root
+
+# Hyprland libs live under /opt/hypr
+export PATH="/opt/hypr/bin:$PATH"
+export LD_LIBRARY_PATH="/opt/hypr/lib:/usr/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+export QT_PLUGIN_PATH="/usr/lib/x86_64-linux-gnu/qt5/plugins"
+export QT_QPA_PLATFORM_PLUGIN_PATH="/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms"
+export QT_QPA_PLATFORM="wayland;xcb"
+export PYTHONHOME="/usr"
+export MOZ_ENABLE_WAYLAND=1
+
+# Passwordless sudo for leviathan and root
+mkdir -p /etc/sudoers.d
+cat << 'EOF' > /etc/sudoers.d/99-leviathan
+ALL ALL=(ALL:ALL) NOPASSWD: ALL
+leviathan ALL=(ALL:ALL) NOPASSWD: ALL
+root ALL=(ALL:ALL) NOPASSWD: ALL
+EOF
+chmod 440 /etc/sudoers.d/99-leviathan 2>/dev/null || true
+
+# Hyprland config (system-wide)
+export HYPRLAND_INSTANCE_SIGNATURE=leviathan
+mkdir -p /run/hyprland
+
+# Start seatd for session/DRM device management
+if [ -x /usr/bin/seatd ]; then
+    /usr/bin/seatd -u root -g video -l info &
+    sleep 0.2
+    chmod 666 /run/seatd.sock 2>/dev/null || true
+    export LIBSEAT_BACKEND=seatd
+    export SEATD_SOCK=/run/seatd.sock
+else
+    export LIBSEAT_BACKEND=noop
+fi
+
+export AQ_NO_MODIFIERS=1
+export AQ_FORCE_LINEAR_BLIT=0
+export AQ_NO_ATOMIC=1
+export AQ_MGPU_NO_EXPLICIT=1
+# In QEMU with -vga none, virtio-gpu is card0 (only DRM device)
+export AQ_DRM_DEVICES=/dev/dri/card0
+
+# Ensure directories for user state and cache exist
+mkdir -p /root/.cache/noctalia /root/.local/state/noctalia /root/.config/noctalia
+chown -R 0:0 /root 2>/dev/null || true
+
+
+# Main execution loop: Pure Hyprland running Noctalia
+while true; do
+    if [ -x /opt/hypr/bin/Hyprland ]; then
+        echo "Leviathan: Starting Hyprland with Noctalia shell..."
+        if [ -x /usr/bin/dbus-run-session ]; then
+            DBUS_WRAP="/usr/bin/dbus-run-session --"
+        else
+            DBUS_WRAP=""
+        fi
+
+        $DBUS_WRAP /opt/hypr/bin/Hyprland --config /etc/hypr/hyprland.conf --i-am-really-stupid > /tmp/hypr-session.log 2>&1
+        EXIT_CODE=$?
+        # Put the failure reason on every console, so the recovery shell shows it
+        for out in /dev/tty1 /dev/console /dev/ttyS0; do
+            [ -c "$out" ] || continue
+            {
+                echo "=== Hyprland exited with code $EXIT_CODE ==="
+                tail -40 /tmp/hypr-session.log 2>/dev/null
+                [ -f /tmp/hypr/hyprland.log ] && tail -40 /tmp/hypr/hyprland.log 2>/dev/null
+                echo "=== (full logs: /tmp/hypr-session.log, /tmp/hypr/hyprland.log) ==="
+            } > "$out" 2>/dev/null || true
+        done
+    fi
+
+    export PS1='leviathan# '
+    echo "Leviathan Desktop session ended. Restarting in 3 seconds..." | tee /dev/console /dev/ttyS0 2>/dev/null || true
+    /bin/getty /dev/tty2 &
+    sleep 3
+done

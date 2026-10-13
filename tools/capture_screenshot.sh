@@ -4,7 +4,7 @@ set -e
 LOG="/tmp/leviathan_art.log"
 PPM="/tmp/leviathan_art.ppm"
 SOCK="/tmp/qemu-art-mon.sock"
-OUT_IMG="/home/inchara/.gemini/antigravity-cli/brain/41035a9c-c632-4422-9829-924c8e88de92/leviathan_underwater_60fps.png"
+OUT_IMG="/home/inchara/.gemini/antigravity-cli/brain/384c0838-ba16-4dd2-9e09-099cae64dcdb/leviathan_underwater_3d.png"
 
 rm -f "$LOG" "$PPM" "$SOCK"
 
@@ -26,9 +26,9 @@ qemu-system-x86_64 \
     -serial file:"$LOG" \
     -daemonize
 
-echo "Waiting for Leviathan 60 FPS swimming scenery to start..."
+echo "Waiting for Leviathan 60 FPS 3D animation scenery to start..."
 for i in {1..50}; do
-    if [ -f "$LOG" ] && grep -q "Starting 60 FPS swimming scenery" "$LOG"; then
+    if [ -f "$LOG" ] && grep -q "Starting 60 FPS" "$LOG"; then
         echo "60 FPS scenery started after $((i * 500)) ms!"
         break
     fi

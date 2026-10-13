@@ -5,9 +5,10 @@
 #include <sys/ioctl.h>
 #include <errno.h>
 
-int main(void)
+int main(int argc, char *argv[])
 {
     int tty;
+    const char *dev = (argc > 1) ? argv[1] : "/dev/tty1";
 
     /*
      * Become a session leader.
@@ -21,23 +22,32 @@ int main(void)
     /*
      * Open Leviathan's terminal.
      */
-    tty = open("/dev/tty1", O_RDWR);
+    tty = open(dev, O_RDWR);
+    if (tty < 0)
+    {
+        tty = open("/dev/console", O_RDWR);
+    }
 
     if (tty < 0)
     {
-        perror("getty: open /dev/tty1");
+        perror("getty: open terminal");
         return 1;
     }
 
     /*
-     * Make tty1 our controlling terminal.
+     * Reactivate VT text mode, unhide cursor, and clear screen
      */
-    if (ioctl(tty, TIOCSCTTY, 0) < 0)
-    {
-        perror("getty: TIOCSCTTY");
-        close(tty);
-        return 1;
+    ioctl(tty, 0x4B3A /* KDSETMODE */, 0 /* KD_TEXT */);
+    ioctl(tty, 0x5606 /* VT_ACTIVATE */, 1);
+    const char *reset_seq = "\033[?25h\033[2J\033[H";
+    if (write(tty, reset_seq, 13) < 0) {
+        // Non-fatal if terminal reset write fails
     }
+
+    /*
+     * Make terminal our controlling terminal (force steal if needed).
+     */
+    ioctl(tty, TIOCSCTTY, 1);
 
     /*
      * Connect stdin, stdout and stderr to the TTY.

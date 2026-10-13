@@ -1,0 +1,45 @@
+# Leviathan OS - Git Ignore
+
+# Build artifacts & target directories
+/build/
+/image/boot/initramfs.img
+/ui/target/
+
+# Ignore heavy rootfs userspace (packed into initramfs by Makefile)
+/rootfs/usr/
+/rootfs/var/
+/rootfs/lib/
+/rootfs/lib64/
+/rootfs/bin/
+/rootfs/sbin/
+/rootfs/opt/
+/rootfs/home/
+/rootfs/root/
+/rootfs/run/
+/rootfs/dev/
+/rootfs/leviathan/
+
+# Disks and images larger than GitHub limit
+*.img
+*.iso
+*.qcow2
+*.vdi
+*.vmdk
+
+# Editors and IDE configurations
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# Temporary, scratch, and log files
+*.log
+/tmp/
+.DS_Store
+
+# OS generated packages & caches
+__pycache__/
+*.py[cod]
+.env

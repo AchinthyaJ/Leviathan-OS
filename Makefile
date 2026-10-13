@@ -10,35 +10,24 @@ IMAGE_INITRAMFS = image/boot/initramfs.img
 BUILD_INITRAMFS = build/initramfs.img
 BUILD_ISO = build/leviathan.iso
 
-OVMF_CODE = /usr/share/OVMF/OVMF_CODE_4M.fd
+OVMF_CODE ?= $(shell for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/edk2/x64/OVMF_CODE.4m.fd /usr/share/edk2-ovmf/x64/OVMF_CODE.4m.fd; do test -f "$$f" && echo "$$f" && break; done)
+OVMF_VARS_SRC ?= $(shell for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/x64/OVMF_VARS.4m.fd /usr/share/edk2-ovmf/x64/OVMF_VARS.4m.fd; do test -f "$$f" && echo "$$f" && break; done)
 OVMF_VARS = build/OVMF_VARS.fd
 
 .PHONY: all bins initramfs iso clean run run-serial run-headless
 
 all: iso
 
-RUST_TARGET = x86_64-unknown-linux-musl
-RUST_BIN = ui/target/$(RUST_TARGET)/release/leviathan-ui
-
-bins: $(BINS) rootfs/bin/leviathan-ui
-
-rootfs/bin/leviathan-ui: $(wildcard ui/src/*.rs) ui/Cargo.toml
-	@mkdir -p rootfs/bin
-	cargo build --release --target $(RUST_TARGET) --manifest-path ui/Cargo.toml
-	cp $(RUST_BIN) rootfs/bin/leviathan-ui
-	@ln -sf leviathan-ui rootfs/bin/leviathan-art
-
-rootfs/bin/leviathan_art: init/leviathan_art.c init/graphics.c init/graphics.h init/font8x8.h
-	@mkdir -p rootfs/bin
-	$(CC) $(CFLAGS) init/leviathan_art.c init/graphics.c -lm -o $@
+bins: $(BINS)
 
 rootfs/bin/%: init/%.c
 	@mkdir -p rootfs/bin
 	$(CC) $(CFLAGS) $< -o $@
 
-initramfs: bins
-	@mkdir -p build
-	cd rootfs && find . -print0 | cpio --null -ov --format=newc | gzip -9 > ../$(BUILD_INITRAMFS)
+initramfs:
+	@mkdir -p build image/boot
+	@test -f $(OVMF_VARS) || cp -f $(OVMF_VARS_SRC) $(OVMF_VARS)
+	cd rootfs && find . -print0 | cpio --null -ov --format=newc | zstd -3 -T0 > ../$(BUILD_INITRAMFS)
 	cp $(BUILD_INITRAMFS) $(IMAGE_INITRAMFS)
 
 iso: initramfs
@@ -48,36 +37,69 @@ iso: initramfs
 clean:
 	rm -f $(BUILD_INITRAMFS) $(IMAGE_INITRAMFS) $(BUILD_ISO)
 
-CLEAN_ENV = env -u GTK_PATH -u GTK_EXE_PREFIX -u GIO_MODULE_DIR -u GTK_IM_MODULE_FILE -u GSETTINGS_SCHEMA_DIR -u LD_LIBRARY_PATH -u LD_PRELOAD
+CLEAN_ENV = env -u GTK_PATH -u GTK_EXE_PREFIX -u GIO_MODULE_DIR -u GTK_IM_MODULE_FILE -u GSETTINGS_SCHEMA_DIR -u LD_LIBRARY_PATH -u LD_PRELOAD SDL_VIDEODRIVER=wayland
 KVM_FLAGS = $(shell test -w /dev/kvm && echo "-enable-kvm -cpu host")
 
 run: iso
+	@test -f $(OVMF_VARS) || cp -f $(OVMF_VARS_SRC) $(OVMF_VARS)
 	$(CLEAN_ENV) qemu-system-x86_64 \
 		$(KVM_FLAGS) \
 		-machine q35 \
-		-m 2G \
-		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
-		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
-		-cdrom $(BUILD_ISO)
-
-run-serial: iso
-	$(CLEAN_ENV) qemu-system-x86_64 \
-		$(KVM_FLAGS) \
-		-machine q35 \
-		-m 2G \
+		-m 8G \
+		-smp 2 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
 		-cdrom $(BUILD_ISO) \
+		-boot d \
+		-vga none \
+		-device virtio-gpu-gl-pci \
+		-display sdl,gl=on,show-cursor=off \
+		-nic user,model=virtio-net-pci \
+		-device virtio-tablet-pci \
+		-audiodev sdl,id=snd0 \
+		-device intel-hda \
+		-device hda-duplex,audiodev=snd0
+
+run-serial: iso
+	@test -f $(OVMF_VARS) || cp -f $(OVMF_VARS_SRC) $(OVMF_VARS)
+	$(CLEAN_ENV) qemu-system-x86_64 \
+		$(KVM_FLAGS) \
+		-machine q35 \
+		-m 8G \
+		-smp 2 \
+		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
+		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
+		-cdrom $(BUILD_ISO) \
+		-boot d \
+		-vga none \
+		-device virtio-gpu-gl-pci \
+		-display sdl,gl=on,show-cursor=off \
+		-nic user,model=virtio-net-pci \
+		-device virtio-tablet-pci \
+		-audiodev sdl,id=snd0 \
+		-device intel-hda \
+		-device hda-duplex,audiodev=snd0 \
 		-serial stdio
 
 run-headless: iso
+	@test -f $(OVMF_VARS) || cp -f $(OVMF_VARS_SRC) $(OVMF_VARS)
 	$(CLEAN_ENV) qemu-system-x86_64 \
 		$(KVM_FLAGS) \
 		-machine q35 \
-		-m 2G \
+		-m 8G \
+		-smp 2 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
 		-cdrom $(BUILD_ISO) \
-		-display vnc=:99 \
+		-boot d \
+		-vga none \
+		-device virtio-gpu-gl-pci \
+		-display egl-headless \
+		-vnc :99 \
+		-nic user,model=virtio-net-pci \
+		-device virtio-tablet-pci \
+		-audiodev none,id=snd0 \
+		-device intel-hda \
+		-device hda-duplex,audiodev=snd0 \
 		-serial stdio
 
