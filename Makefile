@@ -27,10 +27,31 @@ rootfs/bin/%: init/%.c
 ROOTFS_RELEASE_URL ?= https://github.com/AchinthyaJ/Leviathan-OS/releases/latest/download/rootfs.tar.zst
 ROOTFS_ARCHIVE ?= build/rootfs.tar.zst
 
+# Excludes for clean packaging (caches, temp files, logs, docs)
+ROOTFS_EXCLUDES = \
+	--exclude='./tmp/*' \
+	--exclude='./var/tmp/*' \
+	--exclude='./var/log/*' \
+	--exclude='./var/cache/apt/archives/*.deb' \
+	--exclude='./var/cache/apt/*.bin' \
+	--exclude='./var/lib/apt/lists/*' \
+	--exclude='./root/.cache/*' \
+	--exclude='./usr/share/doc/*' \
+	--exclude='./usr/share/man/*' \
+	--exclude='./mnt/*' \
+	--exclude='./run/*' \
+	--exclude='./proc/*' \
+	--exclude='./sys/*' \
+	--exclude='./dev/*' \
+	--exclude='*.old' \
+	--exclude='*.bak' \
+	--exclude='*.tmp' \
+	--exclude='.dockerenv'
+
 pack-rootfs:
 	@mkdir -p build
-	@echo "Packing rootfs into $(ROOTFS_ARCHIVE)..."
-	tar --zstd -cf $(ROOTFS_ARCHIVE) -C rootfs .
+	@echo "Packing clean rootfs into $(ROOTFS_ARCHIVE)..."
+	tar --zstd $(ROOTFS_EXCLUDES) -cf $(ROOTFS_ARCHIVE) -C rootfs .
 	@echo "Created $(ROOTFS_ARCHIVE) (Upload this asset to GitHub Releases)"
 
 fetch-rootfs:
@@ -52,7 +73,19 @@ initramfs:
 		echo "rootfs is missing. Run 'make fetch-rootfs' first."; \
 		exit 1; \
 	fi
-	cd rootfs && find . -print0 | cpio --null -ov --format=newc | zstd -3 -T0 > ../$(BUILD_INITRAMFS)
+	cd rootfs && find . \
+		-path './tmp/*' -prune -o \
+		-path './var/tmp/*' -prune -o \
+		-path './var/log/*' -prune -o \
+		-path './var/cache/apt/archives/*.deb' -prune -o \
+		-path './var/lib/apt/lists/*' -prune -o \
+		-path './root/.cache/*' -prune -o \
+		-path './mnt/*' -prune -o \
+		-path './run/*' -prune -o \
+		-name '*.old' -prune -o \
+		-name '*.bak' -prune -o \
+		-name '.dockerenv' -prune -o \
+		-print0 | cpio --null -ov --format=newc | zstd -3 -T0 > ../$(BUILD_INITRAMFS)
 	cp $(BUILD_INITRAMFS) $(IMAGE_INITRAMFS)
 
 iso: initramfs
