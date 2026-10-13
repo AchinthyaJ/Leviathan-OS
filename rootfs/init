@@ -74,6 +74,13 @@ insmod "$KMODDIR/drivers/hid/usbhid/usbhid.ko" 2>/dev/null || true
 modprobe snd-hda-intel 2>/dev/null || true
 modprobe snd-hda-codec-generic 2>/dev/null || true
 
+# Launch sleek graphical boot animation immediately once /dev/fb0 is active
+SPLASH_PID=""
+if [ -x /bin/bootsplash ] && [ -e /dev/fb0 ]; then
+    /bin/bootsplash 25 >/dev/null 2>&1 &
+    SPLASH_PID=$!
+fi
+
 # Settle udev quickly
 udevadm trigger --action=add 2>/dev/null || true
 udevadm settle --timeout=1 2>/dev/null || true
@@ -367,6 +374,13 @@ chown -R 0:0 /root 2>/dev/null || true
 # Main execution loop: Pure Hyprland running Noctalia
 while true; do
     if [ -x /opt/hypr/bin/Hyprland ]; then
+        # Dismiss boot animation when compositor is ready to take over DRM
+        if [ -n "$SPLASH_PID" ]; then
+            kill "$SPLASH_PID" 2>/dev/null || true
+            wait "$SPLASH_PID" 2>/dev/null || true
+            SPLASH_PID=""
+        fi
+
         echo "Leviathan: Starting Hyprland with Noctalia shell..."
         if [ -x /usr/bin/dbus-run-session ]; then
             DBUS_WRAP="/usr/bin/dbus-run-session --"
