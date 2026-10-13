@@ -1,0 +1,12 @@
+# Noctalia desktop shell – official apt repository
+# Source: https://pkg.noctalia.dev/deb/
+# Added by Leviathan core component at build time.
+# This file is read by apt-get on first boot to install Noctalia.
+#
+# Ubuntu 24.04 (noble) build.
+
+Types: deb
+URIs: https://pkg.noctalia.dev/deb
+Suites: noble
+Components: main
+Signed-By: /usr/share/keyrings/noctalia-archive-keyring.gpg

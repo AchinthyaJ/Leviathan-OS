@@ -50,9 +50,9 @@ ROOTFS_EXCLUDES = \
 
 pack-rootfs:
 	@mkdir -p build
-	@echo "Packing clean rootfs into $(ROOTFS_ARCHIVE)..."
-	tar --zstd $(ROOTFS_EXCLUDES) -cf $(ROOTFS_ARCHIVE) -C rootfs .
-	@echo "Created $(ROOTFS_ARCHIVE) (Upload this asset to GitHub Releases)"
+	@echo "Packing clean rootfs with ultra compression (-19) into $(ROOTFS_ARCHIVE)..."
+	tar $(ROOTFS_EXCLUDES) -cf - -C rootfs . | zstd -19 -T0 > $(ROOTFS_ARCHIVE)
+	@echo "Created $(ROOTFS_ARCHIVE) ($$(ls -lh $(ROOTFS_ARCHIVE) | awk '{print $$5}'))"
 
 fetch-rootfs:
 	@mkdir -p build rootfs

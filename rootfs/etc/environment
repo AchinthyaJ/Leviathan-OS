@@ -1,0 +1,7 @@
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games"
+LD_LIBRARY_PATH="/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
+QT_PLUGIN_PATH="/usr/lib/x86_64-linux-gnu/qt5/plugins"
+DEBIAN_FRONTEND="noninteractive"
+DPKG_DATADIR="/usr/share/dpkg"
+DPKG_MAINTSCRIPT_ARCH="amd64"
+APT_CONFIG="/etc/apt/apt.conf.d/99leviathan.conf"

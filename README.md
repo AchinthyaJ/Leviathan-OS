@@ -70,7 +70,7 @@ make run
 
 ## Contributing
 
-We welcome community contributions! Please read our [Contribution Guidelines](contribution.md) before submitting pull requests.
+We welcome community contributions! Please read our [Contribution Guidelines](CONTRIBUTING.md) before submitting pull requests.
 
 Important contribution requirements:
 - Include visual proof (screenshots or recordings) for any UI, compositor, or application changes.
