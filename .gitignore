@@ -4,6 +4,7 @@
 /build/
 /image/boot/initramfs.img
 /ui/target/
+/target/
 
 # Ignore heavy rootfs userspace (packed into initramfs by Makefile)
 /rootfs/usr/

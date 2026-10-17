@@ -108,3 +108,149 @@ pub fn get_glyph(ch: char) -> &'static [u8; 8] {
         &FONT8X8_BASIC['?' as usize - 32]
     }
 }
+
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
+use fontdue::{Font, FontSettings};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FontWeight {
+    Regular,
+    Medium,
+    Bold,
+}
+
+#[derive(Clone)]
+pub struct CachedGlyph {
+    pub width: usize,
+    pub height: usize,
+    pub xmin: i32,
+    pub ymin: i32,
+    pub advance_width: f32,
+    pub bitmap: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FontMetricsInfo {
+    pub ascent: f32,
+    pub descent: f32,
+    pub line_height: f32,
+}
+
+pub fn get_sf_font(weight: FontWeight) -> &'static Font {
+    match weight {
+        FontWeight::Regular => {
+            static FONT: OnceLock<Font> = OnceLock::new();
+            FONT.get_or_init(|| {
+                let bytes = include_bytes!("../assets/fonts/SF-Pro-Text-Regular.otf");
+                Font::from_bytes(&bytes[..], FontSettings::default())
+                    .expect("SF-Pro-Text-Regular.otf failed to parse")
+            })
+        }
+        FontWeight::Medium => {
+            static FONT: OnceLock<Font> = OnceLock::new();
+            FONT.get_or_init(|| {
+                let bytes = include_bytes!("../assets/fonts/SF-Pro-Text-Medium.otf");
+                Font::from_bytes(&bytes[..], FontSettings::default())
+                    .expect("SF-Pro-Text-Medium.otf failed to parse")
+            })
+        }
+        FontWeight::Bold => {
+            static FONT: OnceLock<Font> = OnceLock::new();
+            FONT.get_or_init(|| {
+                let bytes = include_bytes!("../assets/fonts/SF-Pro-Text-Bold.otf");
+                Font::from_bytes(&bytes[..], FontSettings::default())
+                    .expect("SF-Pro-Text-Bold.otf failed to parse")
+            })
+        }
+    }
+}
+
+static GLYPH_CACHE: OnceLock<RwLock<HashMap<(char, u16, FontWeight), CachedGlyph>>> = OnceLock::new();
+
+fn get_glyph_cache() -> &'static RwLock<HashMap<(char, u16, FontWeight), CachedGlyph>> {
+    GLYPH_CACHE.get_or_init(|| RwLock::new(HashMap::with_capacity(512)))
+}
+
+pub fn get_cached_glyph(ch: char, size_px: f32, weight: FontWeight) -> CachedGlyph {
+    let size_key = (size_px.round() as u16).max(1);
+    let key = (ch, size_key, weight);
+    let cache = get_glyph_cache();
+
+    if let Ok(guard) = cache.read() {
+        if let Some(glyph) = guard.get(&key) {
+            return glyph.clone();
+        }
+    }
+
+    let font = get_sf_font(weight);
+    let (metrics, bitmap) = font.rasterize(ch, size_px);
+    let cached = CachedGlyph {
+        width: metrics.width,
+        height: metrics.height,
+        xmin: metrics.xmin,
+        ymin: metrics.ymin,
+        advance_width: metrics.advance_width,
+        bitmap,
+    };
+
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(key, cached.clone());
+    }
+
+    cached
+}
+
+pub fn font_line_metrics(size_px: f32, weight: FontWeight) -> FontMetricsInfo {
+    let font = get_sf_font(weight);
+    if let Some(m) = font.horizontal_line_metrics(size_px) {
+        FontMetricsInfo {
+            ascent: m.ascent,
+            descent: m.descent,
+            line_height: m.new_line_size,
+        }
+    } else {
+        FontMetricsInfo {
+            ascent: size_px * 0.8,
+            descent: -size_px * 0.2,
+            line_height: size_px * 1.2,
+        }
+    }
+}
+
+pub fn measure_text_sf(text: &str, size_px: f32, weight: FontWeight) -> (i32, i32) {
+    let mut total_w = 0.0f32;
+    for ch in text.chars() {
+        if ch == '\n' {
+            continue;
+        }
+        let g = get_cached_glyph(ch, size_px, weight);
+        total_w += g.advance_width;
+    }
+    let m = font_line_metrics(size_px, weight);
+    (total_w.ceil() as i32, m.line_height.ceil() as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_sf_pro_font() {
+        let reg_font = get_sf_font(FontWeight::Regular);
+        let (metrics, bitmap) = reg_font.rasterize('A', 16.0);
+        assert!(metrics.width > 0 && !bitmap.is_empty());
+
+        let med_font = get_sf_font(FontWeight::Medium);
+        let (metrics, bitmap) = med_font.rasterize('A', 16.0);
+        assert!(metrics.width > 0 && !bitmap.is_empty());
+
+        let bold_font = get_sf_font(FontWeight::Bold);
+        let (metrics, bitmap) = bold_font.rasterize('A', 16.0);
+        assert!(metrics.width > 0 && !bitmap.is_empty());
+
+        let (tw, th) = measure_text_sf("Leviathan OS", 18.0, FontWeight::Medium);
+        assert!(tw > 50 && th > 10, "Text measurement should be reasonable");
+    }
+}
+

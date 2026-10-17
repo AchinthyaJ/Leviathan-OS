@@ -1,1 +1,13 @@
-../usr/lib/os-release
+NAME="Leviathan OS"
+PRETTY_NAME="Leviathan OS"
+VERSION_ID="1.0"
+VERSION="1.0"
+VERSION_CODENAME=noble
+ID=leviathan
+ID_LIKE="ubuntu debian"
+HOME_URL="https://github.com/AchinthyaJ/Leviathan-OS"
+SUPPORT_URL="https://github.com/AchinthyaJ/Leviathan-OS"
+BUG_REPORT_URL="https://github.com/AchinthyaJ/Leviathan-OS/issues"
+PRIVACY_POLICY_URL="https://github.com/AchinthyaJ/Leviathan-OS"
+UBUNTU_CODENAME=noble
+LOGO=leviathan

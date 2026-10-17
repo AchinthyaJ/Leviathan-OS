@@ -46,6 +46,34 @@ nameserver 8.8.8.8
 nameserver 1.1.1.1
 EOF
 
+# Set Leviathan OS release identification
+cat << 'EOF' > "$BUILD_DIR/usr/lib/os-release"
+NAME="Leviathan OS"
+PRETTY_NAME="Leviathan OS"
+VERSION_ID="1.0"
+VERSION="1.0"
+VERSION_CODENAME=noble
+ID=leviathan
+ID_LIKE="ubuntu debian"
+HOME_URL="https://github.com/AchinthyaJ/Leviathan-OS"
+SUPPORT_URL="https://github.com/AchinthyaJ/Leviathan-OS"
+BUG_REPORT_URL="https://github.com/AchinthyaJ/Leviathan-OS/issues"
+PRIVACY_POLICY_URL="https://github.com/AchinthyaJ/Leviathan-OS"
+UBUNTU_CODENAME=noble
+LOGO=leviathan
+EOF
+
+cat << 'EOF' > "$BUILD_DIR/etc/lsb-release"
+DISTRIB_ID=Leviathan
+DISTRIB_RELEASE=1.0
+DISTRIB_CODENAME=noble
+DISTRIB_DESCRIPTION="Leviathan OS"
+EOF
+
+echo -e "Leviathan OS 1.0 \\n \\l\n" > "$BUILD_DIR/etc/issue"
+echo "Leviathan OS 1.0" > "$BUILD_DIR/etc/issue.net"
+
+
 # Configure official apt repositories (main, restricted, universe, multiverse, updates, security, backports)
 cat << 'EOF' > "$BUILD_DIR/etc/apt/sources.list"
 deb http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse

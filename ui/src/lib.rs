@@ -30,3 +30,4 @@ pub mod squircle;
 pub mod widget;
 pub mod wayland_backend;
 pub mod window_manager;
+pub mod prototype;

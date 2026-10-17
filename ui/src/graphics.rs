@@ -1,5 +1,5 @@
 use crate::color::Color;
-use crate::font::get_glyph;
+use crate::font::{font_line_metrics, get_cached_glyph, get_glyph, measure_text_sf, FontWeight};
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
@@ -473,7 +473,13 @@ impl Graphics {
                             let pr = ((blended_r >> r_shift) & r_mask) << r_off;
                             let pg = ((blended_g >> g_shift) & g_mask) << g_off;
                             let pb = ((blended_b >> b_shift) & b_mask) << b_off;
-                            let new_pval = pr | pg | pb;
+                            let pa = if self.transp.length > 0 {
+                                let a_mask = if self.transp.length >= 32 { u32::MAX } else { (1u32 << self.transp.length) - 1 };
+                                a_mask << self.transp.offset
+                            } else {
+                                0
+                            };
+                            let new_pval = pr | pg | pb | pa;
                             self.backbuffer[offset..offset + 4].copy_from_slice(&new_pval.to_ne_bytes());
                         }
                     }
@@ -679,6 +685,94 @@ impl Graphics {
         self.draw_text_scaled(x + offset, y + offset, text, scale, shadow_color);
         self.draw_text_scaled(x, y, text, scale, fg);
     }
+
+    /// Measure text width and line height using SF Pro font
+    #[inline]
+    pub fn measure_text_sf(&self, text: &str, size_px: f32, weight: FontWeight) -> (i32, i32) {
+        measure_text_sf(text, size_px, weight)
+    }
+
+    /// Draw text using SF Pro font with anti-aliasing and proportional metrics.
+    /// `x, y` is the top-left coordinate of the text line box.
+    pub fn draw_text_sf(
+        &mut self,
+        x: i32,
+        y: i32,
+        text: &str,
+        size_px: f32,
+        weight: FontWeight,
+        color: Color,
+    ) {
+        if color.a == 0 || text.is_empty() {
+            return;
+        }
+        let m = font_line_metrics(size_px, weight);
+        let baseline = y + m.ascent.round() as i32;
+
+        let mut cur_x = x as f32;
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut max_y = i32::MIN;
+
+        for ch in text.chars() {
+            if ch == '\n' {
+                cur_x = x as f32;
+                continue;
+            }
+            let glyph = get_cached_glyph(ch, size_px, weight);
+            if glyph.width > 0 && glyph.height > 0 && !glyph.bitmap.is_empty() {
+                let gx = cur_x.round() as i32 + glyph.xmin;
+                let gy = baseline - glyph.ymin - (glyph.height as i32);
+
+                for row in 0..glyph.height {
+                    let py = gy + row as i32;
+                    if py < 0 || py >= self.height as i32 {
+                        continue;
+                    }
+                    let row_offset = row * glyph.width;
+                    for col in 0..glyph.width {
+                        let px = gx + col as i32;
+                        if px < 0 || px >= self.width as i32 {
+                            continue;
+                        }
+                        let coverage = glyph.bitmap[row_offset + col];
+                        if coverage > 0 {
+                            let alpha = ((color.a as u32 * coverage as u32) / 255) as u8;
+                            if alpha > 0 {
+                                self.put_pixel(px, py, Color::new_rgba(color.r, color.g, color.b, alpha));
+                                min_x = min_x.min(px);
+                                min_y = min_y.min(py);
+                                max_x = max_x.max(px + 1);
+                                max_y = max_y.max(py + 1);
+                            }
+                        }
+                    }
+                }
+            }
+            cur_x += glyph.advance_width;
+        }
+
+        if min_x < max_x && min_y < max_y {
+            self.mark_dirty(min_x, min_y, max_x - min_x, max_y - min_y);
+        }
+    }
+
+    /// Draw text with SF Pro and a subtle drop shadow
+    pub fn draw_text_sf_shadow(
+        &mut self,
+        x: i32,
+        y: i32,
+        text: &str,
+        size_px: f32,
+        weight: FontWeight,
+        color: Color,
+        shadow_color: Color,
+    ) {
+        self.draw_text_sf(x + 1, y + 1, text, size_px, weight, shadow_color);
+        self.draw_text_sf(x, y, text, size_px, weight, color);
+    }
+
 
     #[inline(always)]
     pub fn draw_pixel_fast(&mut self, x: u32, y: u32, c: Color) {

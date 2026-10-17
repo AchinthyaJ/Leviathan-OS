@@ -11,6 +11,8 @@ serde_json = "1.0"
 dirs = "4.0"
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+sha-crypt = "0.5"
+fontdue = "0.9"
 
 [lib]
 name = "leviathan_ui"
@@ -23,6 +25,10 @@ path = "src/main.rs"
 [[bin]]
 name = "leviathan"
 path = "src/bin/leviathan_cli.rs"
+
+[[bin]]
+name = "leviathan-preview"
+path = "src/bin/leviathan_preview.rs"
 
 [profile.release]
 opt-level = 3

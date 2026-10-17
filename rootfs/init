@@ -3,30 +3,12 @@
 mount -t devtmpfs devtmpfs /dev
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+echo 1 > /proc/sys/kernel/sysrq 2>/dev/null || true
 mkdir -p /dev/shm /dev/pts /run /tmp
 mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm
 mount -t devpts devpts /dev/pts 2>/dev/null || true
 mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
 chmod 1777 /tmp /dev/shm
-
-# Mount persistent writable data disk (survives reboots)
-mkdir -p /mnt/data
-DATA_MOUNTED=0
-for dev in $(blkid 2>/dev/null | grep -i 'ext4' | cut -d: -f1) /dev/vdb /dev/vda /dev/sdb /dev/sda; do
-    if [ -b "$dev" ]; then
-        if mount -t ext4 "$dev" /mnt/data 2>/dev/null; then
-            echo "Leviathan: Persistent data disk mounted at /mnt/data ($dev)"
-            DATA_MOUNTED=1
-            break
-        fi
-    fi
-done
-if [ $DATA_MOUNTED -eq 0 ]; then
-    echo "Leviathan: No persistent data disk found, using tmpfs for /mnt/data"
-    mount -t tmpfs tmpfs /mnt/data
-fi
-# Ensure the leviathan layers directory exists on the data disk
-mkdir -p /mnt/data/leviathan/layers
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 export LD_LIBRARY_PATH="/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
@@ -74,18 +56,80 @@ insmod "$KMODDIR/drivers/hid/usbhid/usbhid.ko" 2>/dev/null || true
 modprobe snd-hda-intel 2>/dev/null || true
 modprobe snd-hda-codec-generic 2>/dev/null || true
 
-# Launch sleek graphical boot animation immediately once /dev/fb0 is active
+# Bootsplash disabled to prevent C circle from rendering
 SPLASH_PID=""
-if [ -x /bin/bootsplash ] && [ -e /dev/fb0 ]; then
-    /bin/bootsplash 25 >/dev/null 2>&1 &
-    SPLASH_PID=$!
-fi
 
 # Settle udev quickly
 udevadm trigger --action=add 2>/dev/null || true
 udevadm settle --timeout=1 2>/dev/null || true
 
-# Background extra hardware drivers (Wi-Fi, Bluetooth, ACPI, auxiliary GPUs)
+# --- Persistent Storage & System Overlays (Everything gets saved) ---
+modprobe overlay 2>/dev/null || true
+modprobe ahci 2>/dev/null || true
+
+mkdir -p /mnt/data
+DATA_MOUNTED=0
+DATA_DEV=""
+
+for round in 1 2 3; do
+    # Priority 1: Label LEVIATHAN_DATA or persistence or leviathan-data
+    DATA_DEV=$(blkid 2>/dev/null | grep -iE 'LABEL="(LEVIATHAN_DATA|persistence|leviathan-data)"' | head -n1 | cut -d: -f1)
+    [ -n "$DATA_DEV" ] && break
+
+    # Priority 2: Any ext4 partition that is not loop or cdrom
+    for dev in $(blkid 2>/dev/null | grep -i 'TYPE="ext4"' | cut -d: -f1); do
+        case "$dev" in
+            /dev/sr*|/dev/loop*) continue ;;
+            *) DATA_DEV="$dev"; break ;;
+        esac
+    done
+    [ -n "$DATA_DEV" ] && break
+
+    # Priority 3: Check raw block devices /dev/vd* /dev/sd* /dev/nvme*
+    for candidate in /dev/vda1 /dev/vda /dev/vdb1 /dev/vdb /dev/sda1 /dev/sda /dev/sdb1 /dev/sdb; do
+        if [ -b "$candidate" ]; then
+            FSTYPE=$(blkid -o value -s TYPE "$candidate" 2>/dev/null || true)
+            if [ "$FSTYPE" = "ext4" ]; then
+                DATA_DEV="$candidate"
+                break
+            elif [ -z "$FSTYPE" ]; then
+                echo "Leviathan: Initializing persistent storage on $candidate..."
+                mkfs.ext4 -F -L LEVIATHAN_DATA "$candidate" 2>/dev/null && DATA_DEV="$candidate" && break
+            fi
+        fi
+    done
+    [ -n "$DATA_DEV" ] && break
+    sleep 0.3
+done
+
+if [ -n "$DATA_DEV" ] && mount -t ext4 -o noatime,commit=30 "$DATA_DEV" /mnt/data 2>/dev/null; then
+    echo "Leviathan: Persistent storage active ($DATA_DEV mounted at /mnt/data)"
+    DATA_MOUNTED=1
+else
+    echo "Leviathan: No persistent disk detected — using RAM tmpfs for /mnt/data"
+    mount -t tmpfs -o mode=0755 tmpfs /mnt/data
+fi
+mkdir -p /mnt/data/leviathan/layers /mnt/data/overlay
+
+# Mount overlayfs on key system directories so all changes persist across reboots
+if grep -q overlay /proc/filesystems 2>/dev/null || modprobe overlay 2>/dev/null; then
+    echo "Leviathan: Activating persistent system overlays..."
+    for dir in etc root home var opt; do
+        mkdir -p "/mnt/data/overlay/${dir}/upper" "/mnt/data/overlay/${dir}/work"
+        if mount -t overlay "overlay_${dir}" -o "lowerdir=/${dir},upperdir=/mnt/data/overlay/${dir}/upper,workdir=/mnt/data/overlay/${dir}/work" "/${dir}" 2>/dev/null; then
+            echo "Leviathan: Overlay active for /${dir}"
+        fi
+    done
+fi
+
+# Mount host shared folder at /mnt/host (for exchanging files directly with host)
+mkdir -p /mnt/host
+modprobe 9pnet_virtio 2>/dev/null || true
+modprobe 9p 2>/dev/null || true
+if mount -t 9p -o trans=virtio,version=9p2000.L hostshare /mnt/host 2>/dev/null; then
+    echo "Leviathan: Host folder mounted at /mnt/host"
+fi
+
 (
     modprobe i915 2>/dev/null || true
     modprobe amdgpu 2>/dev/null || true
@@ -192,8 +236,15 @@ if [ ! -s /var/lib/dpkg/status ]; then
     mkdir -p /var/lib/dpkg/updates
     mkdir -p /var/lib/dpkg/triggers
     echo "amd64" > /var/lib/dpkg/arch
-    echo "1" > /var/lib/dpkg/triggers/Lock 2>/dev/null || true
 fi
+
+# Clean any stale dpkg or apt lock files
+rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock* /var/lib/dpkg/triggers/Lock 2>/dev/null || true
+
+# Setup apt cache and lists directories with proper permissions for _apt user
+mkdir -p /var/cache/apt/archives/partial /var/lib/apt/lists/partial
+chmod 777 /var/cache/apt/archives/partial /var/lib/apt/lists/partial 2>/dev/null || true
+chown -R _apt:root /var/cache/apt/archives/partial /var/lib/apt/lists/partial 2>/dev/null || true
 
 # 9. Ensure X11 runtime socket directory exists for Xvfb windows
 mkdir -p /tmp/.X11-unix
@@ -205,11 +256,14 @@ mkdir -p /home
 ln -sfn /root /home/leviathan 2>/dev/null || true
 chown -R 0:0 /root 2>/dev/null || true
 
-# 10. Setup DNS resolution fallback
-if [ ! -s /etc/resolv.conf ]; then
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo "nameserver 8.8.4.4" >> /etc/resolv.conf
-fi
+# 10. Enforce working DNS nameservers for internet and QEMU
+cat << 'EOF' > /etc/resolv.conf
+nameserver 10.0.2.3
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+nameserver 8.8.4.4
+EOF
+chmod 644 /etc/resolv.conf 2>/dev/null || true
 
 echo
 echo "Launching Leviathan Wayland compositor session..."
@@ -286,31 +340,6 @@ if [ -x /usr/sbin/ModemManager ]; then
     /usr/sbin/ModemManager --test-no-suspend-resume &
     echo "Leviathan: ModemManager started"
 fi
-
-# Auto-install essential utilities in the background if missing
-(
-    # Wait until network is connected
-    for _i in $(seq 1 15); do
-        if ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 || ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1; then
-            break
-        fi
-        sleep 1
-    done
-
-    MISSING_PKGS=""
-    command -v nano >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS nano"
-    command -v curl >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS curl"
-    command -v wget >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS wget"
-    command -v htop >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS htop"
-    command -v less >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS less"
-
-    if [ -n "$MISSING_PKGS" ] && [ -x /usr/bin/apt-get ]; then
-        echo "Leviathan Auto-Install: Installing essential utilities ($MISSING_PKGS)..." >> /var/log/leviathan-autoinstall.log
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq >/dev/null 2>&1 || true
-        apt-get install -y --no-install-recommends $MISSING_PKGS >> /var/log/leviathan-autoinstall.log 2>&1 || true
-    fi
-) &
 
 # Suppress VT text cursor before launching GUI
 printf '\033[?25l' > /dev/tty1 2>/dev/null || true
