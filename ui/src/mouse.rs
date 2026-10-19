@@ -175,11 +175,10 @@ impl Mouse {
         }
 
         let candidate_dirs = [
-            "cinematic-scene-assets",
-            "/usr/share/cinematic-scene-assets",
-            "/cinematic-scene-assets",
-            "../cinematic-scene-assets",
-            "/home/inchara/My Death/Leviathan/cinematic-scene-assets",
+            "/usr/share/leviathan/assets",
+            "/etc/leviathan/assets",
+            "assets",
+            "../assets",
         ];
 
         let mut cursor_img = None;

@@ -40,7 +40,9 @@ fi
 
 # Optional data disk
 DATA_DISK_OPT=""
-if [ -f "build/leviathan-data.img" ]; then
+if [ -f "build/leviathan_data.img" ]; then
+    DATA_DISK_OPT="-drive file=build/leviathan_data.img,format=raw,if=virtio"
+elif [ -f "build/leviathan-data.img" ]; then
     DATA_DISK_OPT="-drive file=build/leviathan-data.img,format=raw,if=virtio"
 fi
 

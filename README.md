@@ -1,60 +1,111 @@
-# Leviathan OS
+# Leviathan OS — Pre-Release 1 (Alpha)
 
-Leviathan OS is an experimental, modern Linux distribution built on a lightweight live initramfs architecture featuring Hyprland (Wayland compositor) and the custom Noctalia desktop shell.
+**Codename**: Resilient Dragon  
+**Release**: Alpha Pre-Release 1 (`PR-1`)  
+**Base Architecture**: Modern UsrMerge Linux userspace, custom static initramfs, Hyprland Wayland compositor, and Noctalia desktop shell.
+
+Leviathan OS is an experimental, modern Linux distribution engineered from a lightweight live initramfs architecture. It delivers a fast, GPU-accelerated Wayland desktop session with an immersive abyssal visual aesthetic, native application packaging, and persistent storage overlays.
 
 ---
 
 ## Architecture and Key Components
 
-- **Kernel and Boot**: Linux kernel booted via UEFI GRUB with zstd-compressed initramfs for instant startup.
-- **Compositor**: Hyprland built and optimized for virtio-gpu DRM rendering with smooth Wayland client support.
-- **Desktop Shell**: Noctalia desktop environment providing status bar, workspace indicators, and system controls.
-- **Default User**: `leviathan` configured as primary root administrator (UID 0 / GID 0) with passwordless sudo.
-- **Built-in Applications**:
-  - Web Browser: Firefox with native Wayland backend.
-  - File Manager: Dolphin (KDE Frameworks 5) configured for root Wayland session.
-  - Terminal: Kitty with GPU acceleration.
-  - Core Utilities: `nano`, `htop`, `curl`, `wget`, `vim-tiny`, `iproute2`, `net-tools`, `less`.
-  - Package Management: Full native `apt` and `dpkg` support.
+- **Kernel and Boot Architecture**:
+  - Direct UEFI boot via GRUB with high-resolution graphics support (`1920x1080@60`).
+  - High-compression zstd initramfs architecture for near-instant boot times.
+  - Multi-stage cinematic boot sequence with procedural abyssal visual rendering.
+- **Display Server & Compositor**:
+  - Hyprland Wayland compositor optimized specifically for VirtIO-GPU DRM hardware acceleration.
+  - Custom display profile avoiding FP16/atomic-flip virtualization incompatibilities.
+- **Desktop Environment**:
+  - Custom Noctalia desktop shell featuring status bar indicators, workspace management, and launcher controls.
+  - Obsidian glass login screen with secure SHA-512 authentication and power management controls.
+- **Storage and Persistence**:
+  - Automatic detection and mounting of ext4 data disks labeled `LEVIATHAN_DATA`.
+  - Non-destructive persistent overlayfs layers across `/etc`, `/root`, `/home`, `/var`, and `/opt`.
+- **Packaging and Userspace**:
+  - Full native `apt` and `dpkg` support with Ubuntu 24.04 (Noble) package base.
+  - UsrMerge architecture (`/bin -> usr/bin`, `/sbin -> usr/sbin`, `/lib -> usr/lib`, `/lib64 -> usr/lib64`).
+
+---
+
+## Default Credentials
+
+Leviathan OS boots into a secure graphical authentication screen:
+
+- **Username**: `leviathan`
+- **Default Password**: `levi-123`
+- **Privilege Model**: Configured as root administrator (`UID 0` / `GID 0`) with full passwordless `sudo` execution.
+
+---
+
+## Built-in Applications
+
+- **Web Browser**: Firefox with native Wayland backend.
+- **File Manager**: Dolphin (KDE Frameworks 5) configured for Wayland sessions.
+- **Terminal Emulator**: Kitty GPU-accelerated terminal with custom Noctalia theme.
+- **Core CLI Utilities**: `nano`, `htop`, `curl`, `wget`, `vim-tiny`, `iproute2`, `net-tools`, `less`, `udhcpc`.
+- **Multimedia Stack**: PipeWire, WirePlumber, and PulseAudio emulation layer.
+
+---
+
+## Default Desktop Keybindings
+
+| Keybinding | Action |
+| :--- | :--- |
+| `Super + Return` | Open Kitty Terminal |
+| `Super + B` | Launch Firefox Web Browser |
+| `Super + E` | Open Dolphin File Manager |
+| `Super + Space` / `Super + D` | Toggle Application Launcher |
+| `Super + S` | Open System Settings |
+| `Super + L` | Lock Screen / Authentication Overlay |
+| `Super + Q` | Close Active Window |
+| `Super + F` | Toggle Fullscreen |
+| `Super + Shift + Space` | Toggle Floating Window Mode |
+| `Super + 1..5` | Switch Workspace 1 through 5 |
+| `Super + Shift + 1..5` | Move Active Window to Workspace 1 through 5 |
+| `Super + Arrow Keys` | Focus Directional Window |
 
 ---
 
 ## Quick Start
 
-### Prerequisites
+### 1. Prerequisites
 
-Ensure you have QEMU, KVM, and OVMF UEFI installed on your Linux host:
-
-```bash
-# Debian / Ubuntu host:
-sudo apt-get install qemu-system-x86 ovmf gcc make cpio zstd grub-pc-bin grub-efi-amd64-bin xorriso mtools
-```
-
-### Building the ISO
-
-If cloning for the first time without a pre-populated `rootfs/`, download the official rootfs release asset:
+Install the required virtualization, compilation, and ISO creation tools on a Debian/Ubuntu host:
 
 ```bash
-make fetch-rootfs
+sudo apt-get update
+sudo apt-get install -y qemu-system-x86 ovmf gcc make cpio zstd grub-pc-bin grub-efi-amd64-bin xorriso mtools
 ```
 
-To compile init binaries, assemble the initramfs, and create the bootable ISO:
+### 2. Building the ISO
+
+To compile init utilities, package the root filesystem into an initramfs, and create the bootable UEFI ISO:
 
 ```bash
 make iso
 ```
 
-The resulting ISO will be generated at `build/leviathan.iso`.
+The resulting ISO image will be generated at `build/leviathan.iso`.
 
-To package your current `rootfs` for GitHub Releases:
+#### Populating Rootfs from Release Asset
+
+If working from a clean clone without a local `rootfs/usr` tree, download the official rootfs release tarball:
+
+```bash
+make fetch-rootfs
+```
+
+To package a clean userspace snapshot for distribution:
 
 ```bash
 make pack-rootfs
 ```
 
-### Running in QEMU
+### 3. Running in QEMU
 
-Launch Leviathan OS inside QEMU with hardware acceleration and VirtIO GPU support:
+Launch Leviathan OS using the dedicated launcher script with hardware virtualization and VirtIO-GPU OpenGL acceleration:
 
 ```bash
 ./run.sh
@@ -66,17 +117,38 @@ Or via Make:
 make run
 ```
 
+For serial console debugging:
+
+```bash
+make run-serial
+```
+
 ---
 
-## Contributing
+## Project Structure
 
-We welcome community contributions! Please read our [Contribution Guidelines](CONTRIBUTING.md) before submitting pull requests.
+```
+Leviathan/
+├── assets/                  # Wallpapers, brand graphics, and typography
+├── build/                   # Output directory for ISO, initramfs, and data disks
+├── docs/                    # Technical documentation and prototype captures
+├── image/                   # Bootable ISO directory tree (GRUB, EFI, kernel)
+├── init/                    # C sources for static init binaries (poweroff, getty, bootsplash)
+├── rootfs/                  # Root filesystem userspace and system configurations
+├── tools/                   # Bootstrap scripts, automation, and test utilities
+├── ui/                      # Rust sources for preview, login, and UI components
+├── Makefile                 # Build orchestration for bins, initramfs, and ISO
+└── run.sh                   # QEMU launcher with KVM, OVMF, and VirtIO-GPU
+```
 
-Important contribution requirements:
-- Include visual proof (screenshots or recordings) for any UI, compositor, or application changes.
-- Provide thorough documentation of your changes and why they were made.
-- Review the special guidelines for AI assistants if using LLM/agent tooling to prevent low-level OS regressions.
-- For AI agent contributors, refer to [Agents.md](Agents.md) for concrete operational rules and safety constraints.
+---
+
+## Contributing and Operational Guidelines
+
+We welcome community contributions. Please review the following guidelines before submitting pull requests:
+
+- Consult [CONTRIBUTING.md](CONTRIBUTING.md) for contribution requirements and pull request standards.
+- For AI agent contributors, strictly adhere to [Agents.md](Agents.md) to preserve system boot stability, user privileges, and UsrMerge symlink integrity.
 
 ---
 

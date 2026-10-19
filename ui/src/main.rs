@@ -4,7 +4,6 @@ mod app_packages;
 mod app_settings;
 mod app_terminal;
 mod camera;
-mod cinematic;
 mod clipboard;
 mod color;
 mod config;
@@ -46,7 +45,6 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let mut max_frames: Option<u64> = None;
     let mut start_in_3d = false;
-    let mut skip_cinematic = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -60,8 +58,6 @@ fn main() {
             i += 1;
         } else if args[i] == "--3d" {
             start_in_3d = true;
-        } else if args[i] == "--skip-cinematic" {
-            skip_cinematic = true;
         }
         i += 1;
     }

@@ -4,7 +4,6 @@ pub mod app_packages;
 pub mod app_settings;
 pub mod app_terminal;
 pub mod camera;
-pub mod cinematic;
 pub mod clipboard;
 pub mod color;
 pub mod config;

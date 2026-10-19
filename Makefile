@@ -15,7 +15,7 @@ OVMF_CODE ?= $(shell for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/edk2/x6
 OVMF_VARS_SRC ?= $(shell for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/x64/OVMF_VARS.4m.fd /usr/share/edk2-ovmf/x64/OVMF_VARS.4m.fd; do test -f "$$f" && echo "$$f" && break; done)
 OVMF_VARS = build/OVMF_VARS.fd
 
-.PHONY: all bins initramfs iso clean run run-serial run-headless
+.PHONY: all bins initramfs iso clean clean-data run run-serial run-headless pack-rootfs fetch-rootfs
 
 all: iso
 
@@ -89,7 +89,7 @@ fetch-rootfs:
 	tar --zstd -xf $(ROOTFS_ARCHIVE) -C rootfs
 	@echo "Rootfs populated successfully."
 
-initramfs:
+initramfs: bins
 	@mkdir -p build image/boot
 	@test -f $(OVMF_VARS) || cp -f $(OVMF_VARS_SRC) $(OVMF_VARS)
 	@if [ ! -d rootfs/usr ] || [ ! -f rootfs/init ]; then \

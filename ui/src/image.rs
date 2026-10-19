@@ -229,34 +229,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_load_all_cinematic_assets() {
-        let assets = [
-            "Scene-1.png",
-            "Scene-2.png",
-            "Scene-3.png",
-            "Scene-4.png",
-            "Scene-5.png",
-            "Scene-6.png",
-            "milo.png",
-            "speech-1.png",
-            "speech-2.png",
-            "speech-3.png",
-            "handwritten-note.png",
+    fn test_load_logo_asset() {
+        let candidate_paths = [
+            Path::new("assets/logo.png"),
+            Path::new("../assets/logo.png"),
+            Path::new("/usr/share/leviathan/assets/logo.png"),
+            Path::new("/etc/leviathan/assets/logo.png"),
         ];
 
-        let candidate_dirs = [
-            Path::new("cinematic-scene-assets"),
-            Path::new("../cinematic-scene-assets"),
-            Path::new("/cinematic-scene-assets"),
-        ];
-
-        let base_dir = candidate_dirs.iter().find(|d| d.is_dir()).copied();
-        if let Some(base_dir) = base_dir {
-            for name in &assets {
-                let p = base_dir.join(name);
-                let img = Image::load_png(&p);
-                assert!(img.is_ok(), "Failed to load {}: {:?}", p.display(), img.err());
-            }
+        let found = candidate_paths.iter().find(|p| p.exists());
+        if let Some(p) = found {
+            let img = Image::load_png(p);
+            assert!(img.is_ok(), "Failed to load logo: {:?}", img.err());
+            let img = img.unwrap();
+            assert!(img.width > 0 && img.height > 0);
         }
     }
 }

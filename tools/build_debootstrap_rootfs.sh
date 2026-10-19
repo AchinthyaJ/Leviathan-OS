@@ -12,7 +12,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-PROJECT_DIR="/home/inchara/My Death/Leviathan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOTFS="$PROJECT_DIR/rootfs"
 BUILD_DIR="/tmp/leviathan-bootstrap"
 
@@ -48,11 +48,11 @@ EOF
 
 # Set Leviathan OS release identification
 cat << 'EOF' > "$BUILD_DIR/usr/lib/os-release"
-NAME="Leviathan OS"
-PRETTY_NAME="Leviathan OS"
-VERSION_ID="1.0"
-VERSION="1.0"
-VERSION_CODENAME=noble
+PRETTY_NAME="Leviathan OS Pre-Release 1"
+NAME="Leviathan"
+VERSION_ID="PR-1"
+VERSION="PR-1 (Resilient Dragon)"
+VERSION_CODENAME=Resilient
 ID=leviathan
 ID_LIKE="ubuntu debian"
 HOME_URL="https://github.com/AchinthyaJ/Leviathan-OS"
@@ -60,18 +60,18 @@ SUPPORT_URL="https://github.com/AchinthyaJ/Leviathan-OS"
 BUG_REPORT_URL="https://github.com/AchinthyaJ/Leviathan-OS/issues"
 PRIVACY_POLICY_URL="https://github.com/AchinthyaJ/Leviathan-OS"
 UBUNTU_CODENAME=noble
-LOGO=leviathan
+LOGO=logo
 EOF
 
 cat << 'EOF' > "$BUILD_DIR/etc/lsb-release"
 DISTRIB_ID=Leviathan
-DISTRIB_RELEASE=1.0
-DISTRIB_CODENAME=noble
-DISTRIB_DESCRIPTION="Leviathan OS"
+DISTRIB_RELEASE=PR-1
+DISTRIB_CODENAME=Resilient
+DISTRIB_DESCRIPTION="Leviathan OS Pre-Release 1 (Resilient Dragon)"
 EOF
 
-echo -e "Leviathan OS 1.0 \\n \\l\n" > "$BUILD_DIR/etc/issue"
-echo "Leviathan OS 1.0" > "$BUILD_DIR/etc/issue.net"
+echo -e "Leviathan OS Pre-Release 1 (Resilient Dragon) \\n \\l\n" > "$BUILD_DIR/etc/issue"
+echo "Leviathan OS Pre-Release 1 (Resilient Dragon)" > "$BUILD_DIR/etc/issue.net"
 
 
 # Configure official apt repositories (main, restricted, universe, multiverse, updates, security, backports)
