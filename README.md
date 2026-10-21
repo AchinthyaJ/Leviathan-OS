@@ -34,7 +34,7 @@ Leviathan OS is an experimental, modern Linux distribution engineered from a lig
 Leviathan OS boots into a secure graphical authentication screen:
 
 - **Username**: `leviathan`
-- **Default Password**: `levi-123`
+- **Default Password**: `leviathan`
 - **Privilege Model**: Configured as root administrator (`UID 0` / `GID 0`) with full passwordless `sudo` execution.
 
 ---
